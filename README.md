@@ -182,3 +182,28 @@ Each phase has a conformance suite. Include positive execution tests, negative t
 ## 13. Immediate next deliverables
 
 Write a separate **Core IR specification** with exact node schemas and typing rules; a **wire protocol** with versioning and transactional edits; and a **compiler prototype** that builds an integer/struct/`Result` CLI plus one C fixture. These are the smallest artifacts that can falsify the central design assumptions before investing in a full backend standard library.
+
+Initial Phase 0 artifacts:
+
+- [Core IR v0 specification](docs/specs/core-ir-v0.md)
+- [Wire protocol v0 specification](docs/specs/wire-protocol-v0.md)
+- [LLM learning guide](docs/llm/learning-guide.md)
+- [Implementation epics](docs/planning/epics.md) (staged for publication as GitHub Issues)
+
+## 14. Bootstrap prototype
+
+The initial verifier is a dependency-free Zig project. It validates a versioned
+snapshot envelope, supported targets, declaration identity, and the structural
+shape of the Phase 0 type/function subset. It intentionally does not claim to
+validate SSA, operation typing, ownership, or code generation yet.
+
+```sh
+zig build test
+zig build run -- check fixtures/valid/minimal-macos.json
+```
+
+The first-class development target is Apple Silicon macOS
+(`aarch64-macos-none`); Linux x86-64 and Intel macOS are also accepted as
+declared target inputs. The specification uses small, independently testable
+rules and fixtures so an LLM can retrieve the precise rule relevant to an edit
+rather than infer semantics from a large prose document.
