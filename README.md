@@ -193,6 +193,7 @@ Initial Phase 0 artifacts:
 - [Token ABI examples](examples/latent-isa.md)
 - [Semantic operator admission v0](docs/specs/semantic-operators-v0.md)
 - [Scoped model projections v0](docs/specs/model-projections-v0.md)
+- [Token-cost evaluation harness](docs/evaluation/token-cost-harness.md)
 - [Core IR v0 specification](docs/specs/core-ir-v0.md) (experimental graph support)
 - [LLVM lowering v0](docs/specs/llvm-lowering-v0.md)
 - [Implementation epics](docs/planning/epics.md) (staged for publication as GitHub Issues)
@@ -212,6 +213,7 @@ location.
 
 ```sh
 zig build test
+zig build evaluate-token-cost
 zig build run -- legal-next-token-ids -
 zig build run -- check-token-ids 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2
 zig build run -- render-token-ids 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2

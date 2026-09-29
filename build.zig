@@ -44,4 +44,17 @@ pub fn build(b: *std.Build) void {
     const run_minimal_example = b.addRunArtifact(minimal_example);
     const example_step = b.step("example-minimal", "Validate the graph-native minimal example");
     example_step.dependOn(&run_minimal_example.step);
+
+    const token_cost_harness = b.addExecutable(.{
+        .name = "lil-token-cost-harness",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/token_cost_harness.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "lil", .module = lil }},
+        }),
+    });
+    const run_token_cost_harness = b.addRunArtifact(token_cost_harness);
+    const evaluation_step = b.step("evaluate-token-cost", "Run fixed LIL token-cost evaluation tasks");
+    evaluation_step.dependOn(&run_token_cost_harness.step);
 }
