@@ -6,7 +6,7 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(allocator);
     const is_rename = args.len == 5 and std.mem.eql(u8, args[1], "propose-rename");
     if ((args.len != 3 and !is_rename) or args.len < 3) {
-        std.debug.print("usage: lil <check|render|eval|encode|digest> <snapshot.json>\n       lil propose-rename <snapshot.json> <declaration-id> <new-name>\n", .{});
+        std.debug.print("usage: lil <check|render|eval|encode|digest|lower-llvm> <snapshot.json>\n       lil propose-rename <snapshot.json> <declaration-id> <new-name>\n", .{});
         return error.InvalidArguments;
     }
 
@@ -50,6 +50,12 @@ pub fn main(init: std.process.Init) !void {
         try stdout.interface.writeAll(&digest);
         try stdout.interface.writeAll("\n");
         try stdout.interface.flush();
+    } else if (std.mem.eql(u8, args[1], "lower-llvm")) {
+        const llvm_ir = try lil.lowerMainToLlvm(allocator, snapshot.graph);
+        var stdout_buffer: [4096]u8 = undefined;
+        var stdout: std.Io.File.Writer = .init(.stdout(), init.io, &stdout_buffer);
+        try stdout.interface.writeAll(llvm_ir);
+        try stdout.interface.flush();
     } else if (is_rename) {
         const base_digest = try lil.graphDigest(allocator, snapshot.graph);
         const renames = [_]lil.RenameDeclaration{.{ .id = args[3], .new_name = args[4] }};
@@ -65,7 +71,7 @@ pub fn main(init: std.process.Init) !void {
         try stdout.interface.writeAll("\n");
         try stdout.interface.flush();
     } else {
-        std.debug.print("usage: lil <check|render|eval|encode|digest> <snapshot.json>\n       lil propose-rename <snapshot.json> <declaration-id> <new-name>\n", .{});
+        std.debug.print("usage: lil <check|render|eval|encode|digest|lower-llvm> <snapshot.json>\n       lil propose-rename <snapshot.json> <declaration-id> <new-name>\n", .{});
         return error.InvalidArguments;
     }
 }

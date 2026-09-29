@@ -22,6 +22,9 @@ specification, the normative specification wins.
 7. Treat graph edits as transactions. The current `propose-rename` command is
    non-persistent and returns a candidate only after its base digest and graph
    validation both succeed.
+8. Read [LLVM lowering v0](../specs/llvm-lowering-v0.md) only when changing
+   backend behavior. It specifies a projection from a validated graph, never
+   a second language syntax.
 
 ## Current implementation boundary
 

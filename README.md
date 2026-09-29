@@ -187,6 +187,7 @@ Initial Phase 0 artifacts:
 
 - [Core IR v0 specification](docs/specs/core-ir-v0.md)
 - [Wire protocol v0 specification](docs/specs/wire-protocol-v0.md)
+- [LLVM lowering v0](docs/specs/llvm-lowering-v0.md)
 - [LLM learning guide](docs/llm/learning-guide.md)
 - [Implementation epics](docs/planning/epics.md) (staged for publication as GitHub Issues)
 
@@ -211,6 +212,7 @@ zig build run -- eval fixtures/valid/minimal-macos.json
 zig build run -- encode fixtures/valid/minimal-macos.json
 zig build run -- digest fixtures/valid/minimal-macos.json
 zig build run -- propose-rename fixtures/valid/minimal-macos.json fn.main app_main
+zig build run -- lower-llvm fixtures/valid/minimal-macos.json
 zig build example-minimal
 ```
 

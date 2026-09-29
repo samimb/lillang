@@ -719,6 +719,74 @@ pub fn diagnoseGraph(graph: Graph, allocator: std.mem.Allocator) !?Diagnostic {
     return null;
 }
 
+/// Lowers the implemented, parameter-free `pub fn main() -> i32` subset to
+/// LLVM IR. This is the first native-pipeline stage; linking is deliberately
+/// separate from semantic validation.
+pub fn lowerMainToLlvm(allocator: std.mem.Allocator, graph: Graph) ![]u8 {
+    try validateGraph(graph, allocator);
+    var entry: ?FunctionDeclaration = null;
+    for (graph.declarations) |declaration| switch (declaration) {
+        .function_decl => |function| {
+            if (function.visibility == .public and std.mem.eql(u8, function.name, "main")) {
+                if (entry != null) return error.InvalidEntryFunction;
+                entry = function;
+            }
+        },
+        else => {},
+    };
+    const function = entry orelse return error.EntryFunctionMissing;
+    if (function.parameters.len != 0 or function.effects.len != 0 or function.result != .i32) return error.InvalidEntryFunction;
+
+    var block: ?Block = null;
+    for (function.body.blocks) |candidate| {
+        if (std.mem.eql(u8, candidate.id, function.body.entry)) block = candidate;
+    }
+    const entry_block = block orelse return error.InvalidEntryFunction;
+
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
+    try writer.writeAll("define i32 @main() {\nentry:\n");
+
+    const LoweredValue = struct { index: usize, type: ScalarType };
+    var values = std.StringHashMap(LoweredValue).init(allocator);
+    defer values.deinit();
+    var next_value: usize = 0;
+    for (entry_block.operations) |operation| switch (operation) {
+        .const_integer => |constant| {
+            if (!isInteger(constant.type)) return error.InvalidEntryFunction;
+            try writer.print("  %v{d} = add {s} 0, {d}\n", .{ next_value, llvmType(constant.type), constant.value });
+            try values.put(constant.id, .{ .index = next_value, .type = constant.type });
+            next_value += 1;
+        },
+        .wrapping_add => |add| {
+            const left = values.get(add.left.operation_id) orelse return error.UnknownValue;
+            const right = values.get(add.right.operation_id) orelse return error.UnknownValue;
+            if (left.type != add.type or right.type != add.type) return error.BinaryOperandTypeMismatch;
+            try writer.print("  %v{d} = add {s} %v{d}, %v{d}\n", .{ next_value, llvmType(add.type), left.index, right.index });
+            try values.put(add.id, .{ .index = next_value, .type = add.type });
+            next_value += 1;
+        },
+        .return_value => |return_value| {
+            const value = values.get(return_value.value.operation_id) orelse return error.UnknownValue;
+            if (value.type != .i32) return error.ReturnTypeMismatch;
+            try writer.print("  ret i32 %v{d}\n}}\n", .{value.index});
+            return output.toOwnedSlice();
+        },
+    };
+    return error.InvalidEntryFunction;
+}
+
+fn llvmType(type_: ScalarType) []const u8 {
+    return switch (type_) {
+        .i8, .u8 => "i8",
+        .i16, .u16 => "i16",
+        .i32, .u32 => "i32",
+        .i64, .u64 => "i64",
+        else => unreachable,
+    };
+}
+
 fn diagnoseFunction(function: FunctionDeclaration, allocator: std.mem.Allocator) !?Diagnostic {
     var block_ids = std.StringHashMap(void).init(allocator);
     defer block_ids.deinit();
@@ -1141,6 +1209,28 @@ test "interpreter applies i8 wrapping addition" {
     const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .dependencies = &.{}, .declarations = &declarations };
     const result = try evaluateMain(graph, std.testing.allocator);
     try std.testing.expectEqual(IntegerValue{ .signed = -128 }, result);
+}
+
+test "lowers the supported entry graph to LLVM IR" {
+    const snapshot =
+        \\{"protocol":"lil.wire/0","kind":"snapshot","optional_metadata":{},"body":{"id":"module.main","format_version":"lil.cpg/0","language_version":"0.1","target":"aarch64-macos-none","dependencies":[],"declarations":[{"kind":"function","id":"fn.main","name":"main","visibility":"public","parameters":[],"result":"i32","effects":[],"body":{"entry":"entry","blocks":[{"id":"entry","parameters":[],"operations":[{"op":"const","id":"op.left","type":"i32","value":20},{"op":"const","id":"op.right","type":"i32","value":22},{"op":"add.wrapping","id":"op.answer","type":"i32","left":{"operation_id":"op.left","result_index":0},"right":{"operation_id":"op.right","result_index":0}},{"op":"return","id":"term.return","value":{"operation_id":"op.answer","result_index":0}}]}]}}]}}
+    ;
+    var decoded = try decodeJsonSnapshot(std.testing.allocator, snapshot);
+    defer decoded.deinit();
+    const llvm_ir = try lowerMainToLlvm(std.testing.allocator, decoded.graph);
+    defer std.testing.allocator.free(llvm_ir);
+    try std.testing.expectEqualStrings(
+        \\define i32 @main() {
+        \\entry:
+        \\  %v0 = add i32 0, 20
+        \\  %v1 = add i32 0, 22
+        \\  %v2 = add i32 %v0, %v1
+        \\  ret i32 %v2
+        \\}
+        \\
+    ,
+        llvm_ir,
+    );
 }
 
 test "canonical JSON round trips and has a stable digest" {
