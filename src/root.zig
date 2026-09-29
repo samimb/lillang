@@ -502,6 +502,85 @@ pub fn decodeTokenIds(backing_allocator: std.mem.Allocator, target: Target, toke
     };
 }
 
+/// `lil.graph/1` is the model-facing ABI. These are vocabulary IDs, not a
+/// textual syntax or character encoding. `function_2` carries the arity: two
+/// input type slots and one result type slot follow it.
+pub const function_graph_abi_version = "lil.graph/1";
+pub const FunctionGraphTokenAbi = struct {
+    pub const function_2: TokenId = 1847;
+    pub const i64_type: TokenId = 3912;
+    pub const add_i64: TokenId = 8122;
+    pub const argument_0: TokenId = 7201;
+    pub const argument_1: TokenId = 7202;
+};
+
+pub const FunctionGraphDecodeError = error{ UnexpectedToken, IncompleteFunctionGraph };
+
+/// The constraint for the first graph ABI. The final add node is the function
+/// result, so no source-level `return` or graph-closing token is emitted.
+pub fn functionGraphV1NextToken(prefix: []const TokenId) ?TokenId {
+    const expected = [_]TokenId{
+        FunctionGraphTokenAbi.function_2,
+        FunctionGraphTokenAbi.i64_type,
+        FunctionGraphTokenAbi.i64_type,
+        FunctionGraphTokenAbi.i64_type,
+        FunctionGraphTokenAbi.add_i64,
+        FunctionGraphTokenAbi.argument_0,
+        FunctionGraphTokenAbi.argument_1,
+    };
+    if (prefix.len >= expected.len) return null;
+    for (prefix, 0..) |id, index| if (id != expected[index]) return null;
+    return expected[prefix.len];
+}
+
+/// Decodes the seven raw IDs `1847 3912 3912 3912 8122 7201 7202` directly to
+/// an anonymous i64 × i64 → i64 graph. Core-IR return structure is inserted by
+/// the decoder and is never part of the model token stream.
+pub fn decodeFunctionGraphV1(backing_allocator: std.mem.Allocator, target: Target, token_ids: []const TokenId) !DecodedTokenProgram {
+    if (token_ids.len != 7) return error.IncompleteFunctionGraph;
+    for (token_ids, 0..) |id, index| {
+        const expected = functionGraphV1NextToken(token_ids[0..index]) orelse return error.UnexpectedToken;
+        if (id != expected) return error.UnexpectedToken;
+    }
+
+    const arena = try backing_allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(backing_allocator);
+    errdefer {
+        arena.deinit();
+        backing_allocator.destroy(arena);
+    }
+    const allocator = arena.allocator();
+    const parameters = try allocator.alloc(Parameter, 2);
+    parameters[0] = .{ .name = "arg0", .type = .i64 };
+    parameters[1] = .{ .name = "arg1", .type = .i64 };
+    const block_parameters = try allocator.alloc(BlockParameter, 2);
+    block_parameters[0] = .{ .id = "latent.arg.0", .type = .i64 };
+    block_parameters[1] = .{ .id = "latent.arg.1", .type = .i64 };
+    const operations = try allocator.alloc(Operation, 2);
+    operations[0] = .{ .wrapping_add = .{
+        .id = "latent.value.0",
+        .type = .i64,
+        .left = .{ .operation_id = "latent.arg.0", .result_index = 0 },
+        .right = .{ .operation_id = "latent.arg.1", .result_index = 0 },
+    } };
+    operations[1] = .{ .return_value = .{ .id = "latent.result", .value = .{ .operation_id = "latent.value.0", .result_index = 0 } } };
+    const blocks = try allocator.alloc(Block, 1);
+    blocks[0] = .{ .id = "latent.entry", .parameters = block_parameters, .operations = operations };
+    const declarations = try allocator.alloc(Declaration, 1);
+    declarations[0] = .{ .function_decl = .{
+        .id = "latent.function.0",
+        .name = "",
+        .visibility = .private,
+        .parameters = parameters,
+        .result = .i64,
+        .effects = &.{},
+        .body = .{ .entry = "latent.entry", .blocks = blocks },
+    } };
+    const graph = Graph{ .id = "latent.graph", .target = target, .dependencies = &.{}, .declarations = declarations };
+    try validateGraph(graph, allocator);
+    return .{ .arena = arena, .graph = graph, .abi_version = function_graph_abi_version, .token_count = token_ids.len };
+}
+
 /// Structured feedback for a rejected model emission. The constraint is the
 /// one that was in force before `received` was considered, so a caller can
 /// immediately mask its vocabulary and retry without reconstructing state.
@@ -1310,6 +1389,7 @@ fn diagnoseBlock(
 
     var values = std.StringHashMap(ScalarType).init(allocator);
     defer values.deinit();
+    for (block.parameters) |parameter| try values.put(parameter.id, parameter.type);
 
     for (block.operations, 0..) |operation, index| {
         if (operation_ids.contains(operation.id())) return diagnostic(error.DuplicateOperationId, operation.id(), "operation IDs are unique within a function");
@@ -1826,6 +1906,24 @@ test "semantic token ABI decodes directly to a typed graph" {
     const result = try evaluateMain(decoded.graph, std.testing.allocator);
     try std.testing.expectEqual(IntegerValue{ .signed = 42 }, result);
     try std.testing.expectEqualStrings("latent.value.2", decoded.graph.declarations[0].function_decl.body.blocks[0].operations[2].id());
+}
+
+test "seven raw model token IDs decode to an anonymous typed function graph" {
+    const tokens = [_]TokenId{ 1847, 3912, 3912, 3912, 8122, 7201, 7202 };
+    var decoded = try decodeFunctionGraphV1(std.testing.allocator, .aarch64_macos, &tokens);
+    defer decoded.deinit();
+    try std.testing.expectEqualStrings(function_graph_abi_version, decoded.abi_version);
+    const function = decoded.graph.declarations[0].function_decl;
+    try std.testing.expectEqual(@as(usize, 2), function.parameters.len);
+    try std.testing.expectEqual(ScalarType.i64, function.parameters[0].type);
+    try std.testing.expectEqual(ScalarType.i64, function.parameters[1].type);
+    try std.testing.expectEqual(ScalarType.i64, function.result);
+    try std.testing.expectEqualStrings("", function.name);
+    try std.testing.expectEqual(@as(usize, 2), function.body.blocks[0].operations.len);
+    try std.testing.expectEqual(FunctionGraphTokenAbi.i64_type, functionGraphV1NextToken(tokens[0..1]).?);
+    try std.testing.expect(functionGraphV1NextToken(&tokens) == null);
+    const malformed = [_]TokenId{ 1847, 3912, 3912, 3912, 8122, 7202, 7201 };
+    try std.testing.expectError(error.UnexpectedToken, decodeFunctionGraphV1(std.testing.allocator, .aarch64_macos, &malformed));
 }
 
 test "semantic decoder exposes typed next-token constraints" {

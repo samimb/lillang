@@ -57,7 +57,31 @@ function (arg0: i64, arg1: i64) -> i64
 Names, visibility, module exports, and backend entrypoints are optional graph
 metadata. They must not be required to express the function graph itself.
 
-### 2.2 Retired bootstrap ABI: `lil.token/0`
+### 2.2 Executable token ABI: `lil.graph/1`
+
+The current model-facing decoder assigns the following raw `u16` vocabulary
+IDs. The numbers are the program; labels are documentation for ABI authors.
+
+| ID | Semantic token |
+| --- | --- |
+| `1847` | anonymous function with two inputs and one result (`fn2`) |
+| `3912` | `i64` type |
+| `8122` | `add<i64>` |
+| `7201` | argument node 0 |
+| `7202` | argument node 1 |
+
+The complete program is exactly:
+
+```text
+1847 3912 3912 3912 8122 7201 7202
+```
+
+After `1847`, only three type-slot tokens are legal. After `8122`, only the
+two existing `i64` argument-node tokens are legal. The final add node is the
+function result, so no `return`, name, brace, module, or source terminator is
+needed. The decoder constructs the corresponding typed graph directly.
+
+### 2.3 Retired bootstrap ABI: `lil.token/0`
 
 The first executable decoder is intentionally narrow and is retained only as
 backend test scaffolding. It hard-codes a public `main() -> i32`; it is **not**
@@ -93,7 +117,7 @@ The decoder translates it directly into typed graph nodes, assigns stable
 graph identities, validates the result, and records `lil.token/0` with the
 commit. It never parses a source string.
 
-### 2.3 Required decoder behavior
+### 2.4 Required decoder behavior
 
 Before sampling each model token, the compiler service MUST expose a
 `NextTokenConstraint` derived from decoder state. In `lil.token/0` that is one

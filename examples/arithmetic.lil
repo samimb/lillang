@@ -1,6 +1,9 @@
 // LIL debugger projection — human-readable inspection only.
 // This is not parsed, compiled, or round-tripped as source.
 
+// Actual model output (lil.graph/1):
+1847 3912 3912 3912 8122 7201 7202
+
 // Compact graph traversal (for model context):
 F[2,L,L>L](+[0,1])
 

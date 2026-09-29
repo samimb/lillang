@@ -12,14 +12,20 @@ The target representation for `add : i64 × i64 → i64` is the function graph:
 F[2,L,L>L](+[0,1])
 ```
 
+Its executable `lil.graph/1` model output is:
+
+```text
+1847 3912 3912 3912 8122 7201 7202
+```
+
 | Graph component | Meaning |
 | --- | --- |
 | `F[2,L,L>L]` | anonymous function with two `i64` arguments and an `i64` result |
 | `+` | typed add node |
 | `0`, `1` | argument-node references |
 
-`F2LLL+A0A1` is the same graph in a denser mnemonic. Neither spelling is
-source: a compatible model emits assigned semantic token IDs, and its decoder
+`F2LLL+A0A1` is the same graph in a denser mnemonic. The `F…` spellings are
+debugger notation only; the seven numeric IDs are the model program. Its decoder
 allows only the two existing `i64` argument nodes in the add slots. The debugger
 view is [`arithmetic.lil`](arithmetic.lil).
 
