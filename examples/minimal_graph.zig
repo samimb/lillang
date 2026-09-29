@@ -40,6 +40,7 @@ const declarations = [_]lil.Declaration{.{ .function_decl = .{
 const program = lil.Graph{
     .id = "example.minimal",
     .target = .aarch64_macos,
+    .dependencies = &.{},
     .declarations = &declarations,
 };
 

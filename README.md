@@ -204,6 +204,8 @@ zig build test
 zig build run -- check fixtures/valid/minimal-macos.json
 zig build run -- render fixtures/valid/minimal-macos.json
 zig build run -- eval fixtures/valid/minimal-macos.json
+zig build run -- encode fixtures/valid/minimal-macos.json
+zig build run -- digest fixtures/valid/minimal-macos.json
 zig build example-minimal
 ```
 

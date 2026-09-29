@@ -5,7 +5,7 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
     if (args.len != 3) {
-        std.debug.print("usage: lil <check|render|eval> <snapshot.json>\n", .{});
+        std.debug.print("usage: lil <check|render|eval|encode|digest> <snapshot.json>\n", .{});
         return error.InvalidArguments;
     }
 
@@ -34,8 +34,23 @@ pub fn main(init: std.process.Init) !void {
         try result.format(&stdout.interface);
         try stdout.interface.writeAll("\n");
         try stdout.interface.flush();
+    } else if (std.mem.eql(u8, args[1], "encode")) {
+        const encoded = try lil.encodeJsonSnapshot(allocator, snapshot.graph);
+        var stdout_buffer: [4096]u8 = undefined;
+        var stdout: std.Io.File.Writer = .init(.stdout(), init.io, &stdout_buffer);
+        try stdout.interface.writeAll(encoded);
+        try stdout.interface.writeAll("\n");
+        try stdout.interface.flush();
+    } else if (std.mem.eql(u8, args[1], "digest")) {
+        const encoded = try lil.encodeJsonSnapshot(allocator, snapshot.graph);
+        const digest = lil.snapshotDigest(encoded);
+        var stdout_buffer: [4096]u8 = undefined;
+        var stdout: std.Io.File.Writer = .init(.stdout(), init.io, &stdout_buffer);
+        try stdout.interface.writeAll(&digest);
+        try stdout.interface.writeAll("\n");
+        try stdout.interface.flush();
     } else {
-        std.debug.print("usage: lil <check|render|eval> <snapshot.json>\n", .{});
+        std.debug.print("usage: lil <check|render|eval|encode|digest> <snapshot.json>\n", .{});
         return error.InvalidArguments;
     }
 }

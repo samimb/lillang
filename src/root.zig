@@ -30,7 +30,14 @@ pub const ValidationError = error{
 pub const Graph = struct {
     id: []const u8,
     target: Target,
+    dependencies: []const Dependency,
     declarations: []const Declaration,
+};
+
+pub const Dependency = struct {
+    module_name: []const u8,
+    source_digest: []const u8,
+    version: []const u8,
 };
 
 pub const Target = enum {
@@ -215,8 +222,22 @@ fn decodeGraph(allocator: std.mem.Allocator, module: std.json.ObjectMap) !Graph 
     return .{
         .id = try duplicateString(allocator, try string(try required(module, "id"))),
         .target = try decodeTarget(try string(try required(module, "target"))),
+        .dependencies = try decodeDependencies(allocator, try array(try required(module, "dependencies"))),
         .declarations = declarations,
     };
+}
+
+fn decodeDependencies(allocator: std.mem.Allocator, dependencies_json: std.json.Array) ![]const Dependency {
+    const dependencies = try allocator.alloc(Dependency, dependencies_json.items.len);
+    for (dependencies_json.items, 0..) |value, index| {
+        const dependency = try object(value);
+        dependencies[index] = .{
+            .module_name = try duplicateString(allocator, try string(try required(dependency, "module_name"))),
+            .source_digest = try duplicateString(allocator, try string(try required(dependency, "source_digest"))),
+            .version = try duplicateString(allocator, try string(try required(dependency, "version"))),
+        };
+    }
+    return dependencies;
 }
 
 fn decodeDeclaration(allocator: std.mem.Allocator, item: std.json.ObjectMap) !Declaration {
@@ -363,6 +384,235 @@ fn decodeValueRef(allocator: std.mem.Allocator, item: std.json.ObjectMap) !Value
         .operation_id = try duplicateString(allocator, try string(try required(item, "operation_id"))),
         .result_index = @intCast(raw_index),
     };
+}
+
+/// Encodes the implemented graph subset using the canonical `lil.wire/0`
+/// JSON ordering. This is a wire adapter; `Graph` remains authoritative.
+pub fn encodeJsonSnapshot(allocator: std.mem.Allocator, graph: Graph) ![]u8 {
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
+
+    try writer.writeAll("{\"body\":{");
+    try writeKey(writer, "declarations");
+    try writeDeclarations(writer, graph.declarations);
+    try writer.writeAll(",");
+    try writeKey(writer, "dependencies");
+    try writeDependencies(writer, graph.dependencies);
+    try writer.writeAll(",");
+    try writeKeyString(writer, "format_version", format_version);
+    try writer.writeAll(",");
+    try writeKeyString(writer, "id", graph.id);
+    try writer.writeAll(",");
+    try writeKeyString(writer, "language_version", language_version);
+    try writer.writeAll(",");
+    try writeKeyString(writer, "target", graph.target.wireName());
+    try writer.writeAll("},\"kind\":\"snapshot\",\"optional_metadata\":{},\"protocol\":\"lil.wire/0\"}");
+    return output.toOwnedSlice();
+}
+
+/// SHA-256 of canonical wire bytes, encoded as 64 lowercase hexadecimal bytes.
+pub fn snapshotDigest(bytes: []const u8) [64]u8 {
+    var hash: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &hash, .{});
+    const alphabet = "0123456789abcdef";
+    var result: [64]u8 = undefined;
+    for (hash, 0..) |byte, index| {
+        result[index * 2] = alphabet[byte >> 4];
+        result[index * 2 + 1] = alphabet[byte & 0x0f];
+    }
+    return result;
+}
+
+fn writeKey(writer: *std.Io.Writer, key: []const u8) !void {
+    try std.json.Stringify.value(key, .{}, writer);
+    try writer.writeAll(":");
+}
+
+fn writeString(writer: *std.Io.Writer, value: []const u8) !void {
+    try std.json.Stringify.value(value, .{}, writer);
+}
+
+fn writeKeyString(writer: *std.Io.Writer, key: []const u8, value: []const u8) !void {
+    try writeKey(writer, key);
+    try writeString(writer, value);
+}
+
+fn writeDependencies(writer: *std.Io.Writer, dependencies: []const Dependency) !void {
+    try writer.writeAll("[");
+    for (dependencies, 0..) |dependency, index| {
+        if (index != 0) try writer.writeAll(",");
+        try writer.writeAll("{");
+        try writeKeyString(writer, "module_name", dependency.module_name);
+        try writer.writeAll(",");
+        try writeKeyString(writer, "source_digest", dependency.source_digest);
+        try writer.writeAll(",");
+        try writeKeyString(writer, "version", dependency.version);
+        try writer.writeAll("}");
+    }
+    try writer.writeAll("]");
+}
+
+fn writeDeclarations(writer: *std.Io.Writer, declarations: []const Declaration) !void {
+    try writer.writeAll("[");
+    for (declarations, 0..) |declaration, index| {
+        if (index != 0) try writer.writeAll(",");
+        switch (declaration) {
+            .struct_decl => |value| try writeStructDeclaration(writer, value),
+            .function_decl => |value| try writeFunctionDeclaration(writer, value),
+            .external_function_decl => |value| try writeExternalFunctionDeclaration(writer, value),
+        }
+    }
+    try writer.writeAll("]");
+}
+
+fn writeStructDeclaration(writer: *std.Io.Writer, declaration: StructDeclaration) !void {
+    try writer.writeAll("{");
+    try writeKey(writer, "fields");
+    try writer.writeAll("[");
+    for (declaration.fields, 0..) |field, index| {
+        if (index != 0) try writer.writeAll(",");
+        try writer.writeAll("{");
+        try writeKeyString(writer, "name", field.name);
+        try writer.writeAll(",");
+        try writeKeyString(writer, "type", typeName(field.type));
+        try writer.writeAll("}");
+    }
+    try writer.writeAll("],");
+    try writeKeyString(writer, "id", declaration.id);
+    try writer.writeAll(",\"kind\":\"struct\",");
+    try writeKeyString(writer, "name", declaration.name);
+    try writer.writeAll(",");
+    try writeKeyString(writer, "repr", representationName(declaration.repr));
+    try writer.writeAll("}");
+}
+
+fn writeFunctionDeclaration(writer: *std.Io.Writer, declaration: FunctionDeclaration) !void {
+    try writer.writeAll("{");
+    try writeKey(writer, "body");
+    try writeFunctionBody(writer, declaration.body);
+    try writer.writeAll(",\"effects\":[");
+    for (declaration.effects, 0..) |_, index| {
+        if (index != 0) try writer.writeAll(",");
+        try writeString(writer, "UnsafeFFI");
+    }
+    try writer.writeAll("],");
+    try writeKeyString(writer, "id", declaration.id);
+    try writer.writeAll(",\"kind\":\"function\",");
+    try writeKeyString(writer, "name", declaration.name);
+    try writer.writeAll(",");
+    try writeParameters(writer, declaration.parameters);
+    try writer.writeAll(",");
+    try writeKeyString(writer, "result", typeName(declaration.result));
+    try writer.writeAll(",");
+    try writeKeyString(writer, "visibility", visibilityName(declaration.visibility));
+    try writer.writeAll("}");
+}
+
+fn writeExternalFunctionDeclaration(writer: *std.Io.Writer, declaration: ExternalFunctionDeclaration) !void {
+    try writer.writeAll("{");
+    try writeKeyString(writer, "c_symbol", declaration.c_symbol);
+    try writer.writeAll(",");
+    try writeKeyString(writer, "calling_convention", declaration.calling_convention);
+    try writer.writeAll(",");
+    try writeKeyString(writer, "id", declaration.id);
+    try writer.writeAll(",\"kind\":\"external_function\",");
+    try writeKeyString(writer, "library", declaration.library);
+    try writer.writeAll(",");
+    try writeKeyString(writer, "name", declaration.name);
+    try writer.writeAll(",\"parameters\":[");
+    for (declaration.parameters, 0..) |parameter, index| {
+        if (index != 0) try writer.writeAll(",");
+        try writeString(writer, typeName(parameter));
+    }
+    try writer.writeAll("],");
+    try writeKeyString(writer, "result", typeName(declaration.result));
+    try writer.writeAll("}");
+}
+
+fn writeParameters(writer: *std.Io.Writer, parameters: []const Parameter) !void {
+    try writeKey(writer, "parameters");
+    try writer.writeAll("[");
+    for (parameters, 0..) |parameter, index| {
+        if (index != 0) try writer.writeAll(",");
+        try writer.writeAll("{");
+        try writeKeyString(writer, "name", parameter.name);
+        try writer.writeAll(",");
+        try writeKeyString(writer, "type", typeName(parameter.type));
+        try writer.writeAll("}");
+    }
+    try writer.writeAll("]");
+}
+
+fn writeFunctionBody(writer: *std.Io.Writer, body: FunctionBody) !void {
+    try writer.writeAll("{");
+    try writeKey(writer, "blocks");
+    try writer.writeAll("[");
+    for (body.blocks, 0..) |block, index| {
+        if (index != 0) try writer.writeAll(",");
+        try writeBlock(writer, block);
+    }
+    try writer.writeAll("],");
+    try writeKeyString(writer, "entry", body.entry);
+    try writer.writeAll("}");
+}
+
+fn writeBlock(writer: *std.Io.Writer, block: Block) !void {
+    try writer.writeAll("{");
+    try writeKeyString(writer, "id", block.id);
+    try writer.writeAll(",\"operations\":[");
+    for (block.operations, 0..) |operation, index| {
+        if (index != 0) try writer.writeAll(",");
+        try writeOperation(writer, operation);
+    }
+    try writer.writeAll("],\"parameters\":[");
+    for (block.parameters, 0..) |parameter, index| {
+        if (index != 0) try writer.writeAll(",");
+        try writer.writeAll("{");
+        try writeKeyString(writer, "id", parameter.id);
+        try writer.writeAll(",");
+        try writeKeyString(writer, "type", typeName(parameter.type));
+        try writer.writeAll("}");
+    }
+    try writer.writeAll("]}");
+}
+
+fn writeOperation(writer: *std.Io.Writer, operation: Operation) !void {
+    switch (operation) {
+        .const_integer => |value| {
+            try writer.writeAll("{");
+            try writeKeyString(writer, "id", value.id);
+            try writer.writeAll(",\"op\":\"const\",");
+            try writeKeyString(writer, "type", typeName(value.type));
+            try writer.print(",\"value\":{d}", .{value.value});
+            try writer.writeAll("}");
+        },
+        .wrapping_add => |value| {
+            try writer.writeAll("{");
+            try writeKeyString(writer, "id", value.id);
+            try writer.writeAll(",\"left\":");
+            try writeValueRef(writer, value.left);
+            try writer.writeAll(",\"op\":\"add.wrapping\",\"right\":");
+            try writeValueRef(writer, value.right);
+            try writer.writeAll(",");
+            try writeKeyString(writer, "type", typeName(value.type));
+            try writer.writeAll("}");
+        },
+        .return_value => |value| {
+            try writer.writeAll("{");
+            try writeKeyString(writer, "id", value.id);
+            try writer.writeAll(",\"op\":\"return\",\"value\":");
+            try writeValueRef(writer, value.value);
+            try writer.writeAll("}");
+        },
+    }
+}
+
+fn writeValueRef(writer: *std.Io.Writer, value: ValueRef) !void {
+    try writer.writeAll("{");
+    try writeKeyString(writer, "operation_id", value.operation_id);
+    try writer.print(",\"result_index\":{d}", .{value.result_index});
+    try writer.writeAll("}");
 }
 
 /// Validates canonical graph semantics. Future CBOR or binary decoders call
@@ -591,6 +841,10 @@ fn representationName(repr: Representation) []const u8 {
     return switch (repr) { .native => "native", .c => "c" };
 }
 
+fn visibilityName(visibility: Visibility) []const u8 {
+    return switch (visibility) { .private => "private", .public => "public" };
+}
+
 fn integerFits(value: i64, type_: ScalarType) bool {
     return switch (type_) {
         .i8 => value >= -128 and value <= 127,
@@ -704,7 +958,7 @@ test "graph validation rejects duplicate declaration names" {
         .{ .struct_decl = .{ .id = "type.one", .name = "Thing", .repr = .native, .fields = &.{} } },
         .{ .struct_decl = .{ .id = "type.two", .name = "Thing", .repr = .native, .fields = &.{} } },
     };
-    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .declarations = &declarations };
+    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .dependencies = &.{}, .declarations = &declarations };
     try std.testing.expectError(error.DuplicateDeclarationName, validateGraph(graph, std.testing.allocator));
 }
 
@@ -718,7 +972,7 @@ test "graph validation rejects a missing entry block" {
         .effects = &.{},
         .body = .{ .entry = "entry", .blocks = &.{} },
     } }};
-    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .declarations = &declarations };
+    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .dependencies = &.{}, .declarations = &declarations };
     try std.testing.expectError(error.MissingEntryBlock, validateGraph(graph, std.testing.allocator));
 }
 
@@ -737,7 +991,7 @@ test "graph validation rejects a return with the wrong type" {
         .effects = &.{},
         .body = .{ .entry = "entry", .blocks = &blocks },
     } }};
-    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .declarations = &declarations };
+    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .dependencies = &.{}, .declarations = &declarations };
     try std.testing.expectError(error.ReturnTypeMismatch, validateGraph(graph, std.testing.allocator));
 }
 
@@ -756,7 +1010,7 @@ test "renders the canonical graph deterministically" {
         .effects = &.{},
         .body = .{ .entry = "entry", .blocks = &blocks },
     } }};
-    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .declarations = &declarations };
+    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .dependencies = &.{}, .declarations = &declarations };
     const rendered = try renderGraph(std.testing.allocator, graph);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings(
@@ -794,7 +1048,26 @@ test "interpreter applies i8 wrapping addition" {
         .effects = &.{},
         .body = .{ .entry = "entry", .blocks = &blocks },
     } }};
-    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .declarations = &declarations };
+    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .dependencies = &.{}, .declarations = &declarations };
     const result = try evaluateMain(graph, std.testing.allocator);
     try std.testing.expectEqual(IntegerValue{ .signed = -128 }, result);
+}
+
+test "canonical JSON round trips and has a stable digest" {
+    const snapshot =
+        \\{"protocol":"lil.wire/0","kind":"snapshot","optional_metadata":{},"body":{"target":"aarch64-macos-none","id":"module.main","language_version":"0.1","format_version":"lil.cpg/0","dependencies":[{"version":"1.2.3","module_name":"math","source_digest":"abcd"}],"declarations":[{"kind":"function","id":"fn.main","name":"main","visibility":"public","parameters":[],"result":"i32","effects":[],"body":{"entry":"entry","blocks":[{"id":"entry","parameters":[],"operations":[{"op":"const","id":"op.answer","type":"i32","value":42},{"op":"return","id":"term.return","value":{"operation_id":"op.answer","result_index":0}}]}]}}]}}
+    ;
+    var first_graph = try decodeJsonSnapshot(std.testing.allocator, snapshot);
+    defer first_graph.deinit();
+    try std.testing.expectEqual(@as(usize, 1), first_graph.graph.dependencies.len);
+
+    const first = try encodeJsonSnapshot(std.testing.allocator, first_graph.graph);
+    defer std.testing.allocator.free(first);
+    var second_graph = try decodeJsonSnapshot(std.testing.allocator, first);
+    defer second_graph.deinit();
+    const second = try encodeJsonSnapshot(std.testing.allocator, second_graph.graph);
+    defer std.testing.allocator.free(second);
+
+    try std.testing.expectEqualStrings(first, second);
+    try std.testing.expectEqual(snapshotDigest(first), snapshotDigest(second));
 }

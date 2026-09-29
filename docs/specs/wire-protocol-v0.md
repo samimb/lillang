@@ -20,6 +20,12 @@ Every document is an envelope:
 
 Canonical JSON requires UTF-8, no insignificant whitespace, lexicographically sorted object keys, decimal integers without exponent notation, lowercase UUIDs, and arrays in the order prescribed by the Core IR schema. A digest is SHA-256 of the canonical envelope bytes, encoded as lowercase hexadecimal.
 
+The bootstrap encoder implements this ordering for the supported Core IR
+subset. `lil encode <snapshot.json>` decodes, validates, and re-emits canonical
+wire JSON; `lil digest <snapshot.json>` computes the SHA-256 digest of those
+canonical bytes. Equivalent non-canonical input documents therefore have the
+same emitted bytes and digest.
+
 Unknown fields are rejected everywhere except `optional_metadata`. An unknown required feature is rejected before semantic validation. This avoids silently changing the meaning of a saved program.
 
 The initial JSON mapping for the implemented operation subset is:

@@ -16,6 +16,9 @@ specification, the normative specification wins.
    examples, not alternate specifications.
 5. Run `lil render <snapshot.json>` to inspect the compiler's deterministic
    projection of a decoded graph. Treat that projection as read-only context.
+6. Use `lil digest <snapshot.json>` as an edit base only after the document has
+   been decoded and canonically re-encoded. A graph hash identifies a graph
+   revision; it is never a symbol name or a model-local handle.
 
 ## Current implementation boundary
 
