@@ -33,6 +33,13 @@ Zig's LLVM-backed toolchain and verifies that the native process returns `42`:
 bash scripts/test-native-vertical-slice.sh
 ```
 
+For the supported host-native subset, the bootstrap build command combines
+validation, lowering, and linking:
+
+```sh
+bash scripts/build-native.sh <snapshot.json> <output-path>
+```
+
 The v0 lowering accepts only a parameter-free, effect-free public `main` with
 an `i32` result. Branches, calls, structs, `Result`, ownership, optimization,
 debug metadata, object emission, and linking remain outside this implemented
