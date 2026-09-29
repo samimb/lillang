@@ -1,12 +1,12 @@
-// LIL disassembly example — human-readable inspection only.
-// This file is not parsed, compiled, or round-tripped as source.
-// Executable lil.token/0 vector: 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2
+// LIL debugger projection — human-readable inspection only.
+// This is not parsed, compiled, or round-tripped as source.
 
-module latent.module target aarch64-macos-none
+// Compact graph traversal (for model context):
+F[2,L,L>L](+[0,1])
 
-pub fn main() -> i32 {
-  %0: i32 = const 20
-  %1: i32 = const 22
-  %2: i32 = add.wrapping %0, %1
-  return %2
-}
+// Equivalent token-oriented mnemonic, where L denotes i64:
+F2LLL+A0A1
+
+// Expanded debugger view:
+function (arg0: i64, arg1: i64) -> i64
+  add(arg0, arg1)

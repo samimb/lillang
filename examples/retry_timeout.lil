@@ -1,6 +1,6 @@
 // LIL semantic disassembly — illustrative, not source.
 
-pub fn fetch_with_budget(%0: Url) -> Result<Response, FetchError> ![Net, Clock] {
+function (%0: Url) -> Result<Response, FetchError> ![Net, Clock] {
   %1: Result<Response, FetchError> = retry {
     attempts = 3
     backoff = exponential(initial = 100ms, maximum = 1s)

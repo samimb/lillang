@@ -1355,8 +1355,9 @@ fn isInteger(type_: ScalarType) bool {
     };
 }
 
-/// Produces the stable human and model projection for the implemented graph
-/// subset. This is inspection text, not a second source representation.
+/// Produces a debugger projection for the implemented graph subset. Function
+/// names and visibility are linker metadata, so this view intentionally renders
+/// anonymous function shapes rather than a conventional source declaration.
 pub fn renderGraph(allocator: std.mem.Allocator, graph: Graph) ![]u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
@@ -1368,8 +1369,8 @@ pub fn renderGraph(allocator: std.mem.Allocator, graph: Graph) ![]u8 {
             .struct_decl => |struct_decl| try renderStruct(writer, struct_decl),
             .function_decl => |function| try renderFunction(writer, function),
             .external_function_decl => |external_function| try writer.print(
-                "extern fn {s} -> {s} @c({s}, {s})\n",
-                .{ external_function.name, typeName(external_function.result), external_function.c_symbol, external_function.library },
+                "external function -> {s} @c({s}, {s})\n",
+                .{ typeName(external_function.result), external_function.c_symbol, external_function.library },
             ),
         }
     }
@@ -1454,8 +1455,7 @@ fn renderStruct(writer: *std.Io.Writer, struct_decl: StructDeclaration) !void {
 }
 
 fn renderFunction(writer: *std.Io.Writer, function: FunctionDeclaration) !void {
-    if (function.visibility == .public) try writer.writeAll("pub ");
-    try writer.print("fn {s}(", .{function.name});
+    try writer.writeAll("function (");
     for (function.parameters, 0..) |parameter, index| {
         if (index != 0) try writer.writeAll(", ");
         try writer.print("{s}: {s}", .{ parameter.name, typeName(parameter.type) });
@@ -1688,7 +1688,7 @@ test "renders the canonical graph deterministically" {
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings(
         \\module module.main target aarch64-macos-none
-        \\pub fn main() -> i32 {
+        \\function () -> i32 {
         \\  block entry:
         \\    %op.answer: i32 = const 42
         \\    return %op.answer[0]

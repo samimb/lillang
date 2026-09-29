@@ -19,7 +19,7 @@ semantic shape that a token ABI must eventually encode:
 - [`parallel_lookup.lil`](parallel_lookup.lil) — structured parallel composition.
 
 ```sh
-# module → main() -> i32 → const 20 → const 22 → add → return → close
+# Retired backend-only `lil.token/0` smoke test; not the model ABI.
 zig build run -- eval-token-ids 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2
 
 # After the add opcode, only references to the two existing i32 values are legal.

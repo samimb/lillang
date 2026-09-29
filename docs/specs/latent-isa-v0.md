@@ -31,12 +31,38 @@ representation for a compatible model, but a commit MUST also record the
 decoded graph and exact token-ABI version so it remains reproducible after a
 tokenizer changes.
 
-### 2.1 Implemented ABI: `lil.token/0`
+### 2.1 Target function-graph shape
 
-The first executable ABI is intentionally narrow. A token is an unsigned
-16-bit ID. Numeric spelling, commas, and whitespace are tools for inspecting a
-stream; they are not LIL syntax. The ranges and IDs below are normative for
-`lil.token/0`.
+The first useful LIL function is an anonymous typed graph, not a public entry
+point. For two `i64` inputs and one `i64` output containing one add node, the
+compact debugger traversal is:
+
+```text
+F[2,L,L>L](+[0,1])
+```
+
+`F` opens a function graph; `2` is the arity; the first two `L` values are
+argument types; the final `L` is the result type; `+` is typed add; and `0` and
+`1` reference argument nodes. `F2LLL+A0A1` is an even denser mnemonic for the
+same graph. These spellings are visual explanations of semantic tokens, never
+a textual grammar the model must parse or emit.
+
+The human debugger projection is deliberately ordinary but not source:
+
+```text
+function (arg0: i64, arg1: i64) -> i64
+  add(arg0, arg1)
+```
+
+Names, visibility, module exports, and backend entrypoints are optional graph
+metadata. They must not be required to express the function graph itself.
+
+### 2.2 Retired bootstrap ABI: `lil.token/0`
+
+The first executable decoder is intentionally narrow and is retained only as
+backend test scaffolding. It hard-codes a public `main() -> i32`; it is **not**
+the LIL model ABI and must not guide examples or future token allocation. A
+replacement starts from the anonymous function graph above.
 
 | Token ID or range | Meaning | Legal decoder state |
 | --- | --- | --- |
@@ -67,7 +93,7 @@ The decoder translates it directly into typed graph nodes, assigns stable
 graph identities, validates the result, and records `lil.token/0` with the
 commit. It never parses a source string.
 
-### 2.2 Required decoder behavior
+### 2.3 Required decoder behavior
 
 Before sampling each model token, the compiler service MUST expose a
 `NextTokenConstraint` derived from decoder state. In `lil.token/0` that is one

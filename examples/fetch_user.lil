@@ -1,7 +1,7 @@
 // LIL semantic disassembly — illustrative, not yet an executable token ABI vector.
 // The committed program is a typed graph; local handles and this rendering are projections.
 
-pub fn fetch_user(%0: Url) -> Result<User, FetchError> ![Net] {
+function (%0: Url) -> Result<User, FetchError> ![Net] {
   %1: Result<Response, HttpError> = http.get %0
   %2: Response = propagate %1 as FetchError
   %3: Result<User, DecodeError> = json.decode<User> %2

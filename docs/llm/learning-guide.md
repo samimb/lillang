@@ -19,34 +19,34 @@ variable names, JSON, or a file format as a substitute for a token stream.
 1. Read the [language overview](../../README.md) for goals and non-goals.
 2. Read [Latent ISA v0](../specs/latent-isa-v0.md), especially §2.1 and §2.2,
    before emitting or decoding any token.
-3. Read [the ABI examples](../../examples/latent-isa.md) for the executable
-   `lil.token/0` vector and expected constraints.
+3. Read [the ABI examples](../../examples/latent-isa.md) and the arithmetic
+   [debugger projection](../../examples/arithmetic.lil). Start from anonymous
+   typed function graphs such as `F[2,L,L>L](+[0,1])`, not a `main` function.
 4. Read [Core IR v0](../specs/core-ir-v0.md) only when changing the temporary
    typed-graph/backend support layer.
 5. Read [LLVM lowering v0](../specs/llvm-lowering-v0.md) only when changing
    the experimental backend projection.
 
-## `lil.token/0` authoring protocol
+## Function-graph authoring protocol
 
-For the implemented subset, emit this sequence of semantic choices:
+The model-facing ABI must express a function graph without names or an export:
 
-1. `1` to begin the module.
-2. `16` to begin `main() -> i32`.
-3. In the function body, choose `32` (constant), `33` (wrapping addition), or
-   `34` (return), but only when that token is in the next-token constraint.
-4. After `32`, emit an ID from `4096..8191`; it represents `id - 6144`.
-5. After `33` or `34`, emit only a permitted local-value reference from the
-   reported `12288 + n` range. Never invent a value name.
-6. After a return, emit `17`, then `2`.
+1. Open a function graph with its arity and input/result types.
+2. Emit operation nodes whose operand slots are constrained by the expected
+   types and the available argument/value nodes.
+3. Reference arguments and prior values by compact local handles, never names.
+4. Close the graph only once every required result is present.
 
-For example, the vector
+For example, the debugger traversal
 
 ```text
-1 16 32 6164 32 6166 33 12288 12289 34 12290 17 2
+F[2,L,L>L](+[0,1])
 ```
 
-constructs a graph whose `main` returns `42`. The model needs no syntax,
-temporary variable names, braces, or manually repeated type annotations.
+constructs an anonymous `i64 × i64 → i64` graph. The model needs no function
+name, visibility, entrypoint, syntax, temporary names, or braces. The existing
+`lil.token/0` numeric stream is retired backend scaffolding, not an authoring
+protocol.
 
 ## Service rules
 

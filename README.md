@@ -200,12 +200,11 @@ Initial Phase 0 artifacts:
 
 ## 14. Bootstrap prototype
 
-The initial executable path is a dependency-free Zig project. Its
-`lil.token/0` decoder accepts raw `u16` semantic IDs, exposes a typed legal-next
-constraint at each boundary, and constructs a typed graph directly. The first
-implemented path is `const i32 → add.wrapping i32 → return i32` in a
-parameter-free `main`. The decoder intentionally does not yet claim general
-SSA, effects, ownership, or the future semantic-operator set.
+The current executable Zig decoder is backend scaffolding, not the next LIL
+authoring ABI. It proves direct token-to-graph construction and constrained
+decoding, but incorrectly hard-codes `main() -> i32`. The next ABI begins with
+anonymous typed function graphs such as `F[2,L,L>L](+[0,1])`; names, exports,
+and backend entrypoints remain metadata outside the graph body.
 
 Semantic diagnostics name the relevant graph object and violated rule, keeping
 model repairs targeted even though the canonical program has no textual source
@@ -214,11 +213,9 @@ location.
 ```sh
 zig build test
 zig build evaluate-token-cost
+# Retired backend-only bootstrap smoke tests:
 zig build run -- legal-next-token-ids -
-zig build run -- check-token-ids 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2
-zig build run -- render-token-ids 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2
 zig build run -- eval-token-ids 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2
-zig build run -- lower-token-ids 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2
 bash scripts/test-native-vertical-slice.sh
 bash scripts/build-native.sh 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2 ./lil-example
 ```
