@@ -19,6 +19,10 @@ pub const ValidationError = error{
     InvalidResultIndex,
     ReturnTypeMismatch,
     ConstantOutOfRange,
+    BinaryOperandTypeMismatch,
+    NonIntegerOperation,
+    EntryFunctionMissing,
+    InvalidEntryFunction,
 };
 
 /// The canonical program representation. It is independent of JSON, rendering
@@ -90,13 +94,22 @@ pub const Return = struct {
     value: ValueRef,
 };
 
+pub const WrappingAdd = struct {
+    id: []const u8,
+    type: ScalarType,
+    left: ValueRef,
+    right: ValueRef,
+};
+
 pub const Operation = union(enum) {
     const_integer: IntegerConstant,
+    wrapping_add: WrappingAdd,
     return_value: Return,
 
     pub fn id(self: Operation) []const u8 {
         return switch (self) {
             .const_integer => |value| value.id,
+            .wrapping_add => |value| value.id,
             .return_value => |value| value.id,
         };
     }
@@ -326,19 +339,30 @@ fn decodeOperation(allocator: std.mem.Allocator, item: std.json.ObjectMap) !Oper
             .value = try integer(try required(item, "value")),
         } };
     }
+    if (std.mem.eql(u8, op, "add.wrapping")) {
+        return .{ .wrapping_add = .{
+            .id = try duplicateString(allocator, try string(try required(item, "id"))),
+            .type = try decodeType(try required(item, "type")),
+            .left = try decodeValueRef(allocator, try object(try required(item, "left"))),
+            .right = try decodeValueRef(allocator, try object(try required(item, "right"))),
+        } };
+    }
     if (std.mem.eql(u8, op, "return")) {
-        const value = try object(try required(item, "value"));
-        const raw_index = try integer(try required(value, "result_index"));
-        if (raw_index < 0 or raw_index > std.math.maxInt(u32)) return error.InvalidField;
         return .{ .return_value = .{
             .id = try duplicateString(allocator, try string(try required(item, "id"))),
-            .value = .{
-                .operation_id = try duplicateString(allocator, try string(try required(value, "operation_id"))),
-                .result_index = @intCast(raw_index),
-            },
+            .value = try decodeValueRef(allocator, try object(try required(item, "value"))),
         } };
     }
     return error.InvalidField;
+}
+
+fn decodeValueRef(allocator: std.mem.Allocator, item: std.json.ObjectMap) !ValueRef {
+    const raw_index = try integer(try required(item, "result_index"));
+    if (raw_index < 0 or raw_index > std.math.maxInt(u32)) return error.InvalidField;
+    return .{
+        .operation_id = try duplicateString(allocator, try string(try required(item, "operation_id"))),
+        .result_index = @intCast(raw_index),
+    };
 }
 
 /// Validates canonical graph semantics. Future CBOR or binary decoders call
@@ -397,13 +421,31 @@ fn validateBlock(
                 if (!integerFits(constant.value, constant.type)) return error.ConstantOutOfRange;
                 try values.put(constant.id, constant.type);
             },
+            .wrapping_add => |add| {
+                if (!isInteger(add.type)) return error.NonIntegerOperation;
+                const left_type = try resolveLocalValue(&values, add.left);
+                const right_type = try resolveLocalValue(&values, add.right);
+                if (left_type != add.type or right_type != add.type) return error.BinaryOperandTypeMismatch;
+                try values.put(add.id, add.type);
+            },
             .return_value => |return_value| {
-                if (return_value.value.result_index != 0) return error.InvalidResultIndex;
-                const value_type = values.get(return_value.value.operation_id) orelse return error.UnknownValue;
+                const value_type = try resolveLocalValue(&values, return_value.value);
                 if (value_type != function_result) return error.ReturnTypeMismatch;
             },
         }
     }
+}
+
+fn resolveLocalValue(values: *const std.StringHashMap(ScalarType), reference: ValueRef) ValidationError!ScalarType {
+    if (reference.result_index != 0) return error.InvalidResultIndex;
+    return values.get(reference.operation_id) orelse error.UnknownValue;
+}
+
+fn isInteger(type_: ScalarType) bool {
+    return switch (type_) {
+        .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => true,
+        else => false,
+    };
 }
 
 /// Produces the stable human and model projection for the implemented graph
@@ -425,6 +467,77 @@ pub fn renderGraph(allocator: std.mem.Allocator, graph: Graph) ![]u8 {
         }
     }
     return output.toOwnedSlice();
+}
+
+pub const IntegerValue = union(enum) {
+    signed: i64,
+    unsigned: u64,
+
+    pub fn format(self: IntegerValue, writer: *std.Io.Writer) !void {
+        switch (self) {
+            .signed => |value| try writer.print("{d}", .{value}),
+            .unsigned => |value| try writer.print("{d}", .{value}),
+        }
+    }
+};
+
+/// Interprets the current straight-line Core IR subset. It is a semantic
+/// reference implementation, not the eventual native compiler backend.
+pub fn evaluateMain(graph: Graph, allocator: std.mem.Allocator) !IntegerValue {
+    try validateGraph(graph, allocator);
+
+    var entry: ?FunctionDeclaration = null;
+    for (graph.declarations) |declaration| switch (declaration) {
+        .function_decl => |function| {
+            if (function.visibility == .public and std.mem.eql(u8, function.name, "main")) {
+                if (entry != null) return error.InvalidEntryFunction;
+                entry = function;
+            }
+        },
+        else => {},
+    };
+    const function = entry orelse return error.EntryFunctionMissing;
+    if (function.parameters.len != 0 or function.effects.len != 0 or !isInteger(function.result)) return error.InvalidEntryFunction;
+
+    var block: ?Block = null;
+    for (function.body.blocks) |candidate| {
+        if (std.mem.eql(u8, candidate.id, function.body.entry)) block = candidate;
+    }
+    const entry_block = block orelse return error.InvalidEntryFunction;
+
+    var values = std.StringHashMap(IntegerValue).init(allocator);
+    defer values.deinit();
+    for (entry_block.operations) |operation| switch (operation) {
+        .const_integer => |constant| try values.put(constant.id, integerConstantValue(constant)),
+        .wrapping_add => |add| {
+            const left = values.get(add.left.operation_id) orelse return error.UnknownValue;
+            const right = values.get(add.right.operation_id) orelse return error.UnknownValue;
+            try values.put(add.id, wrappingAdd(add.type, left, right));
+        },
+        .return_value => |return_value| return values.get(return_value.value.operation_id) orelse error.UnknownValue,
+    };
+    return error.InvalidEntryFunction;
+}
+
+fn integerConstantValue(constant: IntegerConstant) IntegerValue {
+    return switch (constant.type) {
+        .u8, .u16, .u32, .u64 => .{ .unsigned = @intCast(constant.value) },
+        else => .{ .signed = constant.value },
+    };
+}
+
+fn wrappingAdd(type_: ScalarType, left: IntegerValue, right: IntegerValue) IntegerValue {
+    return switch (type_) {
+        .i8 => .{ .signed = @as(i8, @intCast(left.signed)) +% @as(i8, @intCast(right.signed)) },
+        .i16 => .{ .signed = @as(i16, @intCast(left.signed)) +% @as(i16, @intCast(right.signed)) },
+        .i32 => .{ .signed = @as(i32, @intCast(left.signed)) +% @as(i32, @intCast(right.signed)) },
+        .i64 => .{ .signed = left.signed +% right.signed },
+        .u8 => .{ .unsigned = @as(u8, @intCast(left.unsigned)) +% @as(u8, @intCast(right.unsigned)) },
+        .u16 => .{ .unsigned = @as(u16, @intCast(left.unsigned)) +% @as(u16, @intCast(right.unsigned)) },
+        .u32 => .{ .unsigned = @as(u32, @intCast(left.unsigned)) +% @as(u32, @intCast(right.unsigned)) },
+        .u64 => .{ .unsigned = left.unsigned +% right.unsigned },
+        else => unreachable,
+    };
 }
 
 fn renderStruct(writer: *std.Io.Writer, struct_decl: StructDeclaration) !void {
@@ -455,6 +568,10 @@ fn renderOperation(writer: *std.Io.Writer, operation: Operation) !void {
         .const_integer => |constant| try writer.print(
             "    %{s}: {s} = const {d}\n",
             .{ constant.id, typeName(constant.type), constant.value },
+        ),
+        .wrapping_add => |add| try writer.print(
+            "    %{s}: {s} = add.wrapping %{s}[{d}], %{s}[{d}]\n",
+            .{ add.id, typeName(add.type), add.left.operation_id, add.left.result_index, add.right.operation_id, add.right.result_index },
         ),
         .return_value => |return_value| try writer.print(
             "    return %{s}[{d}]\n",
@@ -653,4 +770,31 @@ test "renders the canonical graph deterministically" {
     ,
         rendered,
     );
+}
+
+test "interpreter applies i8 wrapping addition" {
+    const operations = [_]Operation{
+        .{ .const_integer = .{ .id = "op.max", .type = .i8, .value = 127 } },
+        .{ .const_integer = .{ .id = "op.one", .type = .i8, .value = 1 } },
+        .{ .wrapping_add = .{
+            .id = "op.wrapped",
+            .type = .i8,
+            .left = .{ .operation_id = "op.max", .result_index = 0 },
+            .right = .{ .operation_id = "op.one", .result_index = 0 },
+        } },
+        .{ .return_value = .{ .id = "term.return", .value = .{ .operation_id = "op.wrapped", .result_index = 0 } } },
+    };
+    const blocks = [_]Block{.{ .id = "entry", .parameters = &.{}, .operations = &operations }};
+    const declarations = [_]Declaration{.{ .function_decl = .{
+        .id = "fn.main",
+        .name = "main",
+        .visibility = .public,
+        .parameters = &.{},
+        .result = .i8,
+        .effects = &.{},
+        .body = .{ .entry = "entry", .blocks = &blocks },
+    } }};
+    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .declarations = &declarations };
+    const result = try evaluateMain(graph, std.testing.allocator);
+    try std.testing.expectEqual(IntegerValue{ .signed = -128 }, result);
 }

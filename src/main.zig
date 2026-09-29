@@ -5,7 +5,7 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
     if (args.len != 3) {
-        std.debug.print("usage: lil <check|render> <snapshot.json>\n", .{});
+        std.debug.print("usage: lil <check|render|eval> <snapshot.json>\n", .{});
         return error.InvalidArguments;
     }
 
@@ -27,8 +27,15 @@ pub fn main(init: std.process.Init) !void {
         var stdout: std.Io.File.Writer = .init(.stdout(), init.io, &stdout_buffer);
         try stdout.interface.writeAll(rendered);
         try stdout.interface.flush();
+    } else if (std.mem.eql(u8, args[1], "eval")) {
+        const result = try lil.evaluateMain(snapshot.graph, allocator);
+        var stdout_buffer: [4096]u8 = undefined;
+        var stdout: std.Io.File.Writer = .init(.stdout(), init.io, &stdout_buffer);
+        try result.format(&stdout.interface);
+        try stdout.interface.writeAll("\n");
+        try stdout.interface.flush();
     } else {
-        std.debug.print("usage: lil <check|render> <snapshot.json>\n", .{});
+        std.debug.print("usage: lil <check|render|eval> <snapshot.json>\n", .{});
         return error.InvalidArguments;
     }
 }

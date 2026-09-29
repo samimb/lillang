@@ -24,9 +24,10 @@ The bootstrap verifier decodes a `lil.wire/0` snapshot envelope into a typed
 adapter; it is not a source language or a semantic data structure. The current
 validator checks versions, the declared target, required fields, declaration
 IDs and names, declaration shapes, scalar types, entry-block identity, and the
-v0 `UnsafeFFI` effect. It also validates the implemented `const` → `return`
-operation path: integer range, operation identity, terminator position, local
-SSA reference, result index, and return type.
+v0 `UnsafeFFI` effect. It also validates the implemented `const` →
+`add.wrapping` → `return` operation path: integer range, operation identity,
+operand types, terminator position, local SSA reference, result index, and
+return type. The same subset can be evaluated by the reference interpreter.
 
 It does **not** yet validate operation schemas, SSA dominance, block edges,
 effect propagation, layout, ownership, borrow lifetimes, cleanup, async, or
@@ -46,6 +47,8 @@ properties; consult the phase and rule stated in the diagnostic or spec.
 - Treat `UnsafeFFI` as an explicit boundary. It is never inferred.
 - A `const` creates result index `0`; a `return` must be the final operation
   and must refer to an earlier local result of the function's declared type.
+- `add.wrapping` takes two earlier local results of the same integer type and
+  returns result index `0`; overflow is defined modulo that type's bit width.
 - Prefer a minimal valid graph construction or fixture before proposing a new
   graph construct.
 

@@ -26,7 +26,11 @@ The initial JSON mapping for the implemented operation subset is:
 
 ```json
 {"id":"entry","parameters":[],"operations":[
-  {"op":"const","id":"op.answer","type":"i32","value":42},
+  {"op":"const","id":"op.left","type":"i32","value":20},
+  {"op":"const","id":"op.right","type":"i32","value":22},
+  {"op":"add.wrapping","id":"op.answer","type":"i32",
+   "left":{"operation_id":"op.left","result_index":0},
+   "right":{"operation_id":"op.right","result_index":0}},
   {"op":"return","id":"term.return","value":{"operation_id":"op.answer","result_index":0}}
 ]}
 ```

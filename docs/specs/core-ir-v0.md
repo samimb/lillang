@@ -99,8 +99,9 @@ Block {
 }
 BlockParameter { id: ValueId, type: ScalarType }
 
-Operation = ConstInteger | Return
+Operation = ConstInteger | WrappingAdd | Return
 ConstInteger { id: OperationId, type: IntegerType, value: i64 }
+WrappingAdd { id: OperationId, type: IntegerType, left: ValueRef, right: ValueRef }
 Return { id: OperationId, value: ValueRef }
 ValueRef { operation_id: OperationId, result_index: u32 }
 ```
@@ -113,6 +114,12 @@ MUST have the function's declared result type. Operation IDs are unique within
 a function. These same rules apply regardless of whether a graph was created
 by a model, a Zig API, JSON, or a later binary wire decoder.
 
+`WrappingAdd` has one result at index `0`. Both inputs MUST refer to earlier
+local results at index `0`, have the operation's declared integer type, and
+are added modulo that type's bit width. It is never a terminator. Checked and
+saturating arithmetic need their own result/error semantics and are not yet in
+the implemented subset.
+
 ### Implemented rendering
 
 The renderer projects this subset deterministically for inspection and model
@@ -122,7 +129,9 @@ context. It is not parseable source and cannot replace the graph:
 module module.example target aarch64-macos-none
 pub fn main() -> i32 {
   block entry:
-    %op.answer: i32 = const 42
+    %op.left: i32 = const 20
+    %op.right: i32 = const 22
+    %op.answer: i32 = add.wrapping %op.left[0], %op.right[0]
     return %op.answer[0]
 }
 ```

@@ -6,14 +6,21 @@ surface-language samples and do not require a model to emit JSON.
 ## Minimal graph
 
 [`minimal_graph.zig`](minimal_graph.zig) constructs a module containing a
-public `main` declaration, one entry block, an `i32` constant, and a typed
-return of that constant. It then passes the canonical `Graph` to the semantic
-validator.
+public `main` declaration, one entry block, two `i32` constants, a wrapping
+addition, and a typed return. It then passes the canonical `Graph` to the
+semantic validator.
 
 Run it with:
 
 ```sh
 zig build example-minimal
+```
+
+The same graph can be evaluated through the wire adapter without treating JSON
+as source:
+
+```sh
+zig build run -- eval fixtures/valid/minimal-macos.json
 ```
 
 The `fixtures/` directory is separate: it contains JSON documents solely to
