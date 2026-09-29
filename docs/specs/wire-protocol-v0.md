@@ -1,7 +1,11 @@
 # LIL Wire Protocol v0
 
-**Status:** draft 0.1  
-**Scope:** deterministic interchange of Core IR v0 modules and atomic edits.
+**Status:** experimental supporting infrastructure
+**Scope:** deterministic JSON transport of early Core IR graphs and atomic edits.
+
+> **Design authority:** [Latent ISA v0](latent-isa-v0.md) defines LIL's
+> primary authoring model. This JSON protocol is temporary transport for the
+> graph-layer prototype, not a source language or the token ABI.
 
 ## 1. Envelope and canonical encoding
 

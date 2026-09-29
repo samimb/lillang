@@ -1,7 +1,11 @@
 # LIL Core IR v0
 
-**Status:** draft 0.1  
-**Scope:** the executable semantic subset for the Phase 0 verifier and Phase 1 native vertical slice.
+**Status:** experimental supporting infrastructure
+**Scope:** the executable semantic subset used to validate early typed-graph and native-backend work.
+
+> **Design authority:** [Latent ISA v0](latent-isa-v0.md) defines LIL's
+> primary authoring model. This Core IR draft is a temporary graph-layer
+> experiment; where the two documents conflict, Latent ISA v0 wins.
 
 This document defines the first canonical program graph (CPG) subset. It deliberately excludes generics, closures, async, tasks, exceptions/unwinding, header import, and automatic ownership inference. Those features require extensions after this subset has a conformance suite.
 

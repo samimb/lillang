@@ -1,6 +1,30 @@
 # Implementation epics
 
-These are the issue bodies to publish in GitHub. Each epic should receive the `epic` label and link its child issues with GitHub task lists.
+GitHub is the live tracker. The current product-direction epic is [#7: Latent
+ISA pivot — semantic token ABI and constrained decoding](https://github.com/samimb/lillang/issues/7).
+The older graph/backend epics below describe supporting experimental
+infrastructure; they no longer define LIL's authoring model.
+
+## Epic: Latent ISA pivot — semantic token ABI and constrained decoding
+
+LIL's primary path is `semantic token IDs → constrained decoder → typed latent
+graph → backend`. Human-readable text and JSON snapshots are projections or
+transport formats, not source.
+
+**Tracked child issues:** #8 token ABI and decoder states; #9 constrained
+decoding prototype; #10 semantic operator criteria; #11 scoped model-memory
+projections and handles; #12 whole-task evaluation harness.
+
+**Done when:** a versioned token ABI can construct and edit a typed graph under
+decoder constraints, supported semantic operators have explicit type/effect
+rules, and a reproducible harness measures whole-task token and validity cost.
+
+**Depends on:** none.
+
+---
+
+The following historical epics remain useful only where they validate the
+latent graph and backend layers.
 
 ## Epic: Phase 0 — Canonical semantics and conformance
 

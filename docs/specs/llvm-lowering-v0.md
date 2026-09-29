@@ -1,8 +1,11 @@
 # LLVM lowering v0
 
-**Status:** implemented subset  
+**Status:** experimental implemented subset
 **Scope:** parameter-free `pub fn main() -> i32` with integer `const`,
 `add.wrapping`, and `return`.
+
+> **Design authority:** [Latent ISA v0](latent-isa-v0.md) defines the source
+> path. This lowering validates only an early latent-graph/backend boundary.
 
 This is the first native-pipeline boundary. The canonical graph is validated
 before lowering. LLVM IR is a backend representation, not the LIL source or
