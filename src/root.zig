@@ -549,6 +549,175 @@ pub fn diagnoseTokenIds(
     return null;
 }
 
+/// Compact, projection-local symbol handles are never committed. The compiler
+/// service resolves one to this stable declaration ID before it builds a graph
+/// edit or records an audit event.
+pub const ModelHandle = u16;
+
+pub const ProjectionError = error{
+    UnknownProjectionSymbol,
+    DuplicateProjectionSymbol,
+    ProjectionTooLarge,
+    UnknownModelHandle,
+};
+
+pub const ProjectionAccounting = struct {
+    projection_tokens: u64,
+    retrieval_tokens: u64,
+};
+
+pub const ProjectionLedger = struct {
+    entries: std.ArrayList(ProjectionAccounting) = .empty,
+
+    pub fn deinit(self: *ProjectionLedger, allocator: std.mem.Allocator) void {
+        self.entries.deinit(allocator);
+    }
+
+    pub fn record(self: *ProjectionLedger, allocator: std.mem.Allocator, accounting: ProjectionAccounting) !void {
+        try self.entries.append(allocator, accounting);
+    }
+
+    pub fn totals(self: *const ProjectionLedger) ProjectionAccounting {
+        var result = ProjectionAccounting{ .projection_tokens = 0, .retrieval_tokens = 0 };
+        for (self.entries.items) |entry| {
+            result.projection_tokens += entry.projection_tokens;
+            result.retrieval_tokens += entry.retrieval_tokens;
+        }
+        return result;
+    }
+};
+
+pub const ProjectedSymbolKind = enum { function, structure, external_function };
+
+pub const ProjectedSignature = union(ProjectedSymbolKind) {
+    function: struct {
+        parameters: []const ScalarType,
+        result: ScalarType,
+        effects: []const Effect,
+    },
+    structure: struct { fields: []const ScalarType },
+    external_function: struct {
+        parameters: []const ScalarType,
+        result: ScalarType,
+    },
+};
+
+pub const ProjectedSymbol = struct {
+    handle: ModelHandle,
+    stable_id: []const u8,
+    display_name: []const u8,
+    signature: ProjectedSignature,
+};
+
+/// A task-bounded, read-only view of only the declarations the caller asked
+/// the compiler service to inject. It contains types and effects but no graph
+/// mutation path and no text that can be interpreted as source.
+pub const ScopedProjection = struct {
+    arena: *std.heap.ArenaAllocator,
+    graph_id: []const u8,
+    symbols: []const ProjectedSymbol,
+    accounting: ProjectionAccounting,
+
+    pub fn deinit(self: *ScopedProjection) void {
+        const backing_allocator = self.arena.child_allocator;
+        self.arena.deinit();
+        backing_allocator.destroy(self.arena);
+    }
+
+    pub fn resolveHandle(self: *const ScopedProjection, handle: ModelHandle) ProjectionError![]const u8 {
+        for (self.symbols) |symbol| {
+            if (symbol.handle == handle) return symbol.stable_id;
+        }
+        return error.UnknownModelHandle;
+    }
+};
+
+/// Opens one immutable model projection. `requested_ids` are stable graph
+/// identities, never names; requesting a declaration twice is rejected instead
+/// of allocating aliases that could make a later edit ambiguous.
+pub fn openScopedProjection(
+    backing_allocator: std.mem.Allocator,
+    ledger: *ProjectionLedger,
+    graph: Graph,
+    requested_ids: []const []const u8,
+    accounting: ProjectionAccounting,
+) !ScopedProjection {
+    if (requested_ids.len > std.math.maxInt(ModelHandle)) return error.ProjectionTooLarge;
+    const arena = try backing_allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(backing_allocator);
+    errdefer {
+        arena.deinit();
+        backing_allocator.destroy(arena);
+    }
+    const allocator = arena.allocator();
+    const symbols = try allocator.alloc(ProjectedSymbol, requested_ids.len);
+    for (requested_ids, 0..) |requested_id, index| {
+        for (requested_ids[0..index]) |earlier_id| {
+            if (std.mem.eql(u8, requested_id, earlier_id)) return error.DuplicateProjectionSymbol;
+        }
+        const declaration = findDeclaration(graph, requested_id) orelse return error.UnknownProjectionSymbol;
+        symbols[index] = try projectDeclaration(allocator, declaration, @intCast(index + 1));
+    }
+    try ledger.record(backing_allocator, accounting);
+    return .{
+        .arena = arena,
+        .graph_id = try allocator.dupe(u8, graph.id),
+        .symbols = symbols,
+        .accounting = accounting,
+    };
+}
+
+fn findDeclaration(graph: Graph, stable_id: []const u8) ?Declaration {
+    for (graph.declarations) |declaration| {
+        if (std.mem.eql(u8, declaration.id(), stable_id)) return declaration;
+    }
+    return null;
+}
+
+fn projectDeclaration(allocator: std.mem.Allocator, declaration: Declaration, handle: ModelHandle) !ProjectedSymbol {
+    const stable_id = try allocator.dupe(u8, declaration.id());
+    const display_name = try allocator.dupe(u8, declaration.name());
+    return switch (declaration) {
+        .function_decl => |function| .{
+            .handle = handle,
+            .stable_id = stable_id,
+            .display_name = display_name,
+            .signature = .{ .function = .{
+                .parameters = try projectParameterTypes(allocator, function.parameters),
+                .result = function.result,
+                .effects = try allocator.dupe(Effect, function.effects),
+            } },
+        },
+        .struct_decl => |structure| .{
+            .handle = handle,
+            .stable_id = stable_id,
+            .display_name = display_name,
+            .signature = .{ .structure = .{ .fields = try projectFieldTypes(allocator, structure.fields) } },
+        },
+        .external_function_decl => |function| .{
+            .handle = handle,
+            .stable_id = stable_id,
+            .display_name = display_name,
+            .signature = .{ .external_function = .{
+                .parameters = try allocator.dupe(ScalarType, function.parameters),
+                .result = function.result,
+            } },
+        },
+    };
+}
+
+fn projectParameterTypes(allocator: std.mem.Allocator, parameters: []const Parameter) ![]const ScalarType {
+    const types = try allocator.alloc(ScalarType, parameters.len);
+    for (parameters, 0..) |parameter, index| types[index] = parameter.type;
+    return types;
+}
+
+fn projectFieldTypes(allocator: std.mem.Allocator, fields: []const Field) ![]const ScalarType {
+    const types = try allocator.alloc(ScalarType, fields.len);
+    for (fields, 0..) |field, index| types[index] = field.type;
+    return types;
+}
+
 /// Decodes v0 JSON into the canonical graph. JSON ends at this adapter.
 pub fn decodeJsonSnapshot(backing_allocator: std.mem.Allocator, bytes: []const u8) !DecodedSnapshot {
     const arena = try backing_allocator.create(std.heap.ArenaAllocator);
@@ -1706,4 +1875,74 @@ test "token diagnostics preserve decoder state and target before rejection" {
         else => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(error.InvalidLiteralToken, decoder_diagnostic.failure);
+}
+
+test "scoped projections expose requested symbols, stable resolution, and token accounting" {
+    const main_parameters = [_]Parameter{};
+    const helper_parameters = [_]Parameter{.{ .name = "value", .type = .i32 }};
+    const declarations = [_]Declaration{
+        .{ .function_decl = .{
+            .id = "fn.main",
+            .name = "main",
+            .visibility = .public,
+            .parameters = &main_parameters,
+            .result = .i32,
+            .effects = &.{},
+            .body = .{ .entry = "entry", .blocks = &.{} },
+        } },
+        .{ .function_decl = .{
+            .id = "fn.helper",
+            .name = "helper",
+            .visibility = .private,
+            .parameters = &helper_parameters,
+            .result = .i64,
+            .effects = &.{},
+            .body = .{ .entry = "entry", .blocks = &.{} },
+        } },
+    };
+    const graph = Graph{ .id = "module.projection", .target = .aarch64_macos, .dependencies = &.{}, .declarations = &declarations };
+    const requested = [_][]const u8{"fn.helper"};
+    var ledger = ProjectionLedger{};
+    defer ledger.deinit(std.testing.allocator);
+    var projection = try openScopedProjection(std.testing.allocator, &ledger, graph, &requested, .{
+        .projection_tokens = 11,
+        .retrieval_tokens = 7,
+    });
+    defer projection.deinit();
+
+    try std.testing.expectEqualStrings("module.projection", projection.graph_id);
+    try std.testing.expectEqual(@as(usize, 1), projection.symbols.len);
+    try std.testing.expectEqualStrings("fn.helper", try projection.resolveHandle(1));
+    try std.testing.expectError(error.UnknownModelHandle, projection.resolveHandle(2));
+    switch (projection.symbols[0].signature) {
+        .function => |signature| {
+            try std.testing.expectEqual(@as(usize, 1), signature.parameters.len);
+            try std.testing.expectEqual(ScalarType.i32, signature.parameters[0]);
+            try std.testing.expectEqual(ScalarType.i64, signature.result);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(ProjectionAccounting{ .projection_tokens = 11, .retrieval_tokens = 7 }, ledger.totals());
+}
+
+test "scoped projections reject ambiguous or unknown stable identities" {
+    const declarations = [_]Declaration{.{ .struct_decl = .{
+        .id = "type.user",
+        .name = "User",
+        .repr = .native,
+        .fields = &.{},
+    } }};
+    const graph = Graph{ .id = "module.projection", .target = .aarch64_macos, .dependencies = &.{}, .declarations = &declarations };
+    var ledger = ProjectionLedger{};
+    defer ledger.deinit(std.testing.allocator);
+    const duplicate_ids = [_][]const u8{ "type.user", "type.user" };
+    try std.testing.expectError(error.DuplicateProjectionSymbol, openScopedProjection(std.testing.allocator, &ledger, graph, &duplicate_ids, .{
+        .projection_tokens = 0,
+        .retrieval_tokens = 0,
+    }));
+    const missing_ids = [_][]const u8{"type.missing"};
+    try std.testing.expectError(error.UnknownProjectionSymbol, openScopedProjection(std.testing.allocator, &ledger, graph, &missing_ids, .{
+        .projection_tokens = 0,
+        .retrieval_tokens = 0,
+    }));
 }

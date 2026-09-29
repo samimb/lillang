@@ -120,6 +120,9 @@ total information and interaction cost to implement and safely change a task:
 semantic output tokens, retrieved context, constrained-decoding retries, tool
 calls, compile time, and human review effort.
 
+[Scoped model projections v0](model-projections-v0.md) defines the implemented
+read-only handle and accounting boundary.
+
 ## 6. Current prototype boundary
 
 The Zig prototype now decodes the first raw token-ID subset directly into a
