@@ -10,8 +10,13 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, args[2], allocator, .limited(16 * 1024 * 1024));
-    lil.validateSnapshot(allocator, bytes) catch |err| {
-        std.debug.print("invalid snapshot: {t}\n", .{err});
+    var snapshot = lil.decodeJsonSnapshot(allocator, bytes) catch |err| {
+        std.debug.print("invalid wire snapshot: {t}\n", .{err});
+        return err;
+    };
+    defer snapshot.deinit();
+    lil.validateGraph(snapshot.graph, allocator) catch |err| {
+        std.debug.print("invalid canonical graph: {t}\n", .{err});
         return err;
     };
     std.debug.print("valid LIL Core IR v0 snapshot\n", .{});

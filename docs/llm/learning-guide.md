@@ -17,10 +17,12 @@ specification, the normative specification wins.
 
 ## Current implementation boundary
 
-The bootstrap verifier accepts a `lil.wire/0` snapshot envelope containing a
-`lil.cpg/0` module. It currently validates versions, the declared target,
-required fields, declaration IDs and names, declaration shapes, scalar types,
-and the v0 `UnsafeFFI` effect.
+The bootstrap verifier decodes a `lil.wire/0` snapshot envelope into a typed
+`lil.cpg/0` graph, then validates that graph. JSON is one replaceable transport
+adapter; it is not a source language or a semantic data structure. The current
+validator checks versions, the declared target, required fields, declaration
+IDs and names, declaration shapes, scalar types, entry-block identity, and the
+v0 `UnsafeFFI` effect.
 
 It does **not** yet validate operation schemas, SSA dominance, block edges,
 effect propagation, layout, ownership, borrow lifetimes, cleanup, async, or
@@ -29,7 +31,8 @@ properties; consult the phase and rule stated in the diagnostic or spec.
 
 ## Authoring rules
 
-- Treat the graph, rather than a rendered text file, as the source of truth.
+- Treat the graph, rather than a rendered text file or JSON wire document, as
+  the source of truth.
 - Include every required field and use exact version strings.
 - Give each declaration a unique, stable `id` and a unique module-local `name`.
 - Declare the target explicitly. The initial accepted targets are Apple Silicon
@@ -37,7 +40,8 @@ properties; consult the phase and rule stated in the diagnostic or spec.
 - Use only the currently defined scalar types unless the Core IR version adds a
   feature-gated extension.
 - Treat `UnsafeFFI` as an explicit boundary. It is never inferred.
-- Prefer a minimal valid fixture before proposing a new graph construct.
+- Prefer a minimal valid graph construction or fixture before proposing a new
+  graph construct.
 
 ## How to extend the language
 

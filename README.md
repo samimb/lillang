@@ -192,14 +192,17 @@ Initial Phase 0 artifacts:
 
 ## 14. Bootstrap prototype
 
-The initial verifier is a dependency-free Zig project. It validates a versioned
-snapshot envelope, supported targets, declaration identity, and the structural
-shape of the Phase 0 type/function subset. It intentionally does not claim to
-validate SSA, operation typing, ownership, or code generation yet.
+The initial verifier is a dependency-free Zig project. Its JSON wire adapter
+decodes a versioned snapshot into a typed canonical graph; graph validation
+then checks supported targets, declaration identity, entry blocks, and the
+structural shape of the Phase 0 type/function subset. JSON is not a source
+language or canonical representation. The verifier intentionally does not yet
+claim to validate SSA, operation typing, ownership, or code generation.
 
 ```sh
 zig build test
 zig build run -- check fixtures/valid/minimal-macos.json
+zig build example-minimal
 ```
 
 The first-class development target is Apple Silicon macOS

@@ -10,16 +10,129 @@ pub const ValidationError = error{
     UnsupportedTarget,
     DuplicateDeclarationId,
     DuplicateDeclarationName,
+    DuplicateBlockId,
+    MissingEntryBlock,
 };
 
-/// Validates the structural, versioning, and identity rules that make a
-/// snapshot safe to pass to later semantic validation. SSA, operation typing,
-/// and ownership validation are intentionally separate future passes.
-pub fn validateSnapshot(allocator: std.mem.Allocator, bytes: []const u8) !void {
-    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, bytes, .{});
-    defer parsed.deinit();
+/// The canonical program representation. It is independent of JSON, rendering
+/// syntax, model handles, and storage format.
+pub const Graph = struct {
+    id: []const u8,
+    target: Target,
+    declarations: []const Declaration,
+};
 
-    const envelope = try object(parsed.value);
+pub const Target = enum {
+    aarch64_macos,
+    x86_64_macos,
+    x86_64_linux,
+
+    pub fn wireName(self: Target) []const u8 {
+        return switch (self) {
+            .aarch64_macos => "aarch64-macos-none",
+            .x86_64_macos => "x86_64-macos-none",
+            .x86_64_linux => "x86_64-linux-gnu",
+        };
+    }
+};
+
+pub const ScalarType = enum {
+    unit,
+    boolean,
+    i8,
+    i16,
+    i32,
+    i64,
+    u8,
+    u16,
+    u32,
+    u64,
+    f32,
+    f64,
+};
+
+pub const Visibility = enum { private, public };
+pub const Effect = enum { unsafe_ffi };
+
+pub const Parameter = struct { name: []const u8, type: ScalarType };
+pub const Field = struct { name: []const u8, type: ScalarType };
+pub const Representation = enum { native, c };
+
+pub const StructDeclaration = struct {
+    id: []const u8,
+    name: []const u8,
+    repr: Representation,
+    fields: []const Field,
+};
+
+pub const Block = struct { id: []const u8 };
+
+pub const FunctionBody = struct {
+    entry: []const u8,
+    blocks: []const Block,
+};
+
+pub const FunctionDeclaration = struct {
+    id: []const u8,
+    name: []const u8,
+    visibility: Visibility,
+    parameters: []const Parameter,
+    result: ScalarType,
+    effects: []const Effect,
+    body: FunctionBody,
+};
+
+pub const ExternalFunctionDeclaration = struct {
+    id: []const u8,
+    name: []const u8,
+    c_symbol: []const u8,
+    calling_convention: []const u8,
+    library: []const u8,
+    parameters: []const ScalarType,
+    result: ScalarType,
+};
+
+pub const Declaration = union(enum) {
+    struct_decl: StructDeclaration,
+    function_decl: FunctionDeclaration,
+    external_function_decl: ExternalFunctionDeclaration,
+
+    pub fn id(self: Declaration) []const u8 {
+        return switch (self) {
+            .struct_decl => |value| value.id,
+            .function_decl => |value| value.id,
+            .external_function_decl => |value| value.id,
+        };
+    }
+
+    pub fn name(self: Declaration) []const u8 {
+        return switch (self) {
+            .struct_decl => |value| value.name,
+            .function_decl => |value| value.name,
+            .external_function_decl => |value| value.name,
+        };
+    }
+};
+
+/// Owns the memory for a graph decoded from a wire representation. Graphs
+/// constructed directly in Zig can use static or caller-owned memory instead.
+pub const DecodedSnapshot = struct {
+    arena: std.heap.ArenaAllocator,
+    graph: Graph,
+
+    pub fn deinit(self: *DecodedSnapshot) void {
+        self.arena.deinit();
+    }
+};
+
+/// Decodes v0 JSON into the canonical graph. JSON ends at this adapter.
+pub fn decodeJsonSnapshot(backing_allocator: std.mem.Allocator, bytes: []const u8) !DecodedSnapshot {
+    var arena = std.heap.ArenaAllocator.init(backing_allocator);
+    errdefer arena.deinit();
+    const allocator = arena.allocator();
+
+    const document = try std.json.parseFromSliceLeaky(std.json.Value, allocator, bytes, .{});
+    const envelope = try object(document);
     try expectStringEqual(try required(envelope, "protocol"), "lil.wire/0");
     try expectStringEqual(try required(envelope, "kind"), "snapshot");
     _ = try object(try required(envelope, "optional_metadata"));
@@ -27,105 +140,180 @@ pub fn validateSnapshot(allocator: std.mem.Allocator, bytes: []const u8) !void {
     const module = try object(try required(envelope, "body"));
     try expectStringEqual(try required(module, "format_version"), format_version);
     try expectStringEqual(try required(module, "language_version"), language_version);
-    try validateTarget(try string(try required(module, "target")));
-    _ = try string(try required(module, "id"));
     _ = try array(try required(module, "dependencies"));
 
-    const declarations = try array(try required(module, "declarations"));
+    return .{ .arena = arena, .graph = try decodeGraph(allocator, module) };
+}
+
+fn decodeGraph(allocator: std.mem.Allocator, module: std.json.ObjectMap) !Graph {
+    const declarations_json = try array(try required(module, "declarations"));
+    const declarations = try allocator.alloc(Declaration, declarations_json.items.len);
+    for (declarations_json.items, 0..) |item, index| {
+        declarations[index] = try decodeDeclaration(allocator, try object(item));
+    }
+    return .{
+        .id = try duplicateString(allocator, try string(try required(module, "id"))),
+        .target = try decodeTarget(try string(try required(module, "target"))),
+        .declarations = declarations,
+    };
+}
+
+fn decodeDeclaration(allocator: std.mem.Allocator, item: std.json.ObjectMap) !Declaration {
+    const kind = try string(try required(item, "kind"));
+    if (std.mem.eql(u8, kind, "struct")) return .{ .struct_decl = try decodeStruct(allocator, item) };
+    if (std.mem.eql(u8, kind, "function")) return .{ .function_decl = try decodeFunction(allocator, item) };
+    if (std.mem.eql(u8, kind, "external_function")) return .{ .external_function_decl = try decodeExternalFunction(allocator, item) };
+    return error.InvalidField;
+}
+
+fn decodeStruct(allocator: std.mem.Allocator, item: std.json.ObjectMap) !StructDeclaration {
+    const fields_json = try array(try required(item, "fields"));
+    const fields = try allocator.alloc(Field, fields_json.items.len);
+    for (fields_json.items, 0..) |value, index| {
+        const field = try object(value);
+        fields[index] = .{
+            .name = try duplicateString(allocator, try string(try required(field, "name"))),
+            .type = try decodeType(try required(field, "type")),
+        };
+    }
+    return .{
+        .id = try duplicateString(allocator, try string(try required(item, "id"))),
+        .name = try duplicateString(allocator, try string(try required(item, "name"))),
+        .repr = try decodeRepresentation(try string(try required(item, "repr"))),
+        .fields = fields,
+    };
+}
+
+fn decodeFunction(allocator: std.mem.Allocator, item: std.json.ObjectMap) !FunctionDeclaration {
+    const body_json = try object(try required(item, "body"));
+    return .{
+        .id = try duplicateString(allocator, try string(try required(item, "id"))),
+        .name = try duplicateString(allocator, try string(try required(item, "name"))),
+        .visibility = try decodeVisibility(try string(try required(item, "visibility"))),
+        .parameters = try decodeParameters(allocator, try array(try required(item, "parameters"))),
+        .result = try decodeType(try required(item, "result")),
+        .effects = try decodeEffects(allocator, try array(try required(item, "effects"))),
+        .body = try decodeBody(allocator, body_json),
+    };
+}
+
+fn decodeExternalFunction(allocator: std.mem.Allocator, item: std.json.ObjectMap) !ExternalFunctionDeclaration {
+    const parameters_json = try array(try required(item, "parameters"));
+    const parameters = try allocator.alloc(ScalarType, parameters_json.items.len);
+    for (parameters_json.items, 0..) |parameter, index| parameters[index] = try decodeType(parameter);
+    return .{
+        .id = try duplicateString(allocator, try string(try required(item, "id"))),
+        .name = try duplicateString(allocator, try string(try required(item, "name"))),
+        .c_symbol = try duplicateString(allocator, try string(try required(item, "c_symbol"))),
+        .calling_convention = try duplicateString(allocator, try string(try required(item, "calling_convention"))),
+        .library = try duplicateString(allocator, try string(try required(item, "library"))),
+        .parameters = parameters,
+        .result = try decodeType(try required(item, "result")),
+    };
+}
+
+fn decodeParameters(allocator: std.mem.Allocator, parameters_json: std.json.Array) ![]const Parameter {
+    const parameters = try allocator.alloc(Parameter, parameters_json.items.len);
+    for (parameters_json.items, 0..) |value, index| {
+        const parameter = try object(value);
+        parameters[index] = .{
+            .name = try duplicateString(allocator, try string(try required(parameter, "name"))),
+            .type = try decodeType(try required(parameter, "type")),
+        };
+    }
+    return parameters;
+}
+
+fn decodeEffects(allocator: std.mem.Allocator, effects_json: std.json.Array) ![]const Effect {
+    const effects = try allocator.alloc(Effect, effects_json.items.len);
+    for (effects_json.items, 0..) |value, index| {
+        try expectStringEqual(value, "UnsafeFFI");
+        effects[index] = .unsafe_ffi;
+    }
+    return effects;
+}
+
+fn decodeBody(allocator: std.mem.Allocator, item: std.json.ObjectMap) !FunctionBody {
+    const blocks_json = try array(try required(item, "blocks"));
+    const blocks = try allocator.alloc(Block, blocks_json.items.len);
+    for (blocks_json.items, 0..) |value, index| {
+        const block = try object(value);
+        blocks[index] = .{ .id = try duplicateString(allocator, try string(try required(block, "id"))) };
+    }
+    return .{
+        .entry = try duplicateString(allocator, try string(try required(item, "entry"))),
+        .blocks = blocks,
+    };
+}
+
+/// Validates canonical graph semantics. Future CBOR or binary decoders call
+/// this same function and therefore share precisely the same semantic rules.
+pub fn validateGraph(graph: Graph, allocator: std.mem.Allocator) !void {
     var ids = std.StringHashMap(void).init(allocator);
     defer ids.deinit();
     var names = std.StringHashMap(void).init(allocator);
     defer names.deinit();
 
-    for (declarations.items) |declaration| {
-        const item = try object(declaration);
-        const id = try string(try required(item, "id"));
-        const name = try string(try required(item, "name"));
-        if (ids.contains(id)) return error.DuplicateDeclarationId;
-        if (names.contains(name)) return error.DuplicateDeclarationName;
-        try ids.put(id, {});
-        try names.put(name, {});
-
-        const kind = try string(try required(item, "kind"));
-        if (std.mem.eql(u8, kind, "struct")) {
-            try validateStruct(item);
-        } else if (std.mem.eql(u8, kind, "function")) {
-            try validateFunction(item);
-        } else if (std.mem.eql(u8, kind, "external_function")) {
-            try validateExternalFunction(item);
-        } else {
-            return error.InvalidField;
+    for (graph.declarations) |declaration| {
+        if (ids.contains(declaration.id())) return error.DuplicateDeclarationId;
+        if (names.contains(declaration.name())) return error.DuplicateDeclarationName;
+        try ids.put(declaration.id(), {});
+        try names.put(declaration.name(), {});
+        switch (declaration) {
+            .function_decl => |function| try validateFunction(function, allocator),
+            else => {},
         }
     }
 }
 
-fn validateTarget(target: []const u8) ValidationError!void {
-    const supported = [_][]const u8{
-        "aarch64-macos-none",
-        "x86_64-macos-none",
-        "x86_64-linux-gnu",
-    };
-    for (supported) |candidate| {
-        if (std.mem.eql(u8, target, candidate)) return;
+fn validateFunction(function: FunctionDeclaration, allocator: std.mem.Allocator) !void {
+    var block_ids = std.StringHashMap(void).init(allocator);
+    defer block_ids.deinit();
+    for (function.body.blocks) |block| {
+        if (block_ids.contains(block.id)) return error.DuplicateBlockId;
+        try block_ids.put(block.id, {});
     }
+    if (!block_ids.contains(function.body.entry)) return error.MissingEntryBlock;
+}
+
+fn decodeTarget(value: []const u8) ValidationError!Target {
+    if (std.mem.eql(u8, value, "aarch64-macos-none")) return .aarch64_macos;
+    if (std.mem.eql(u8, value, "x86_64-macos-none")) return .x86_64_macos;
+    if (std.mem.eql(u8, value, "x86_64-linux-gnu")) return .x86_64_linux;
     return error.UnsupportedTarget;
 }
 
-fn validateStruct(declaration: std.json.ObjectMap) !void {
-    const repr = try string(try required(declaration, "repr"));
-    if (!std.mem.eql(u8, repr, "native") and !std.mem.eql(u8, repr, "c")) return error.InvalidField;
-
-    const fields = try array(try required(declaration, "fields"));
-    for (fields.items) |field| {
-        const item = try object(field);
-        _ = try string(try required(item, "name"));
-        try validateType(try required(item, "type"));
-    }
-}
-
-fn validateFunction(declaration: std.json.ObjectMap) !void {
-    const visibility = try string(try required(declaration, "visibility"));
-    if (!std.mem.eql(u8, visibility, "private") and !std.mem.eql(u8, visibility, "public")) return error.InvalidField;
-
-    const parameters = try array(try required(declaration, "parameters"));
-    for (parameters.items) |parameter| {
-        const item = try object(parameter);
-        _ = try string(try required(item, "name"));
-        try validateType(try required(item, "type"));
-    }
-    try validateType(try required(declaration, "result"));
-    try validateEffects(try required(declaration, "effects"));
-    const body = try object(try required(declaration, "body"));
-    _ = try string(try required(body, "entry"));
-    _ = try array(try required(body, "blocks"));
-}
-
-fn validateExternalFunction(declaration: std.json.ObjectMap) !void {
-    _ = try string(try required(declaration, "c_symbol"));
-    _ = try string(try required(declaration, "calling_convention"));
-    _ = try string(try required(declaration, "library"));
-    const parameters = try array(try required(declaration, "parameters"));
-    for (parameters.items) |parameter| try validateType(parameter);
-    try validateType(try required(declaration, "result"));
-}
-
-fn validateEffects(value: std.json.Value) !void {
-    const effects = try array(value);
-    for (effects.items) |effect| {
-        try expectStringEqual(effect, "UnsafeFFI");
-    }
-}
-
-fn validateType(value: std.json.Value) !void {
+fn decodeType(value: std.json.Value) ValidationError!ScalarType {
     const name = try string(value);
-    const allowed = [_][]const u8{
-        "unit", "bool", "i8",  "i16", "i32", "i64", "u8",
-        "u16",  "u32",  "u64", "f32", "f64",
-    };
-    for (allowed) |candidate| {
-        if (std.mem.eql(u8, name, candidate)) return;
-    }
+    if (std.mem.eql(u8, name, "unit")) return .unit;
+    if (std.mem.eql(u8, name, "bool")) return .boolean;
+    if (std.mem.eql(u8, name, "i8")) return .i8;
+    if (std.mem.eql(u8, name, "i16")) return .i16;
+    if (std.mem.eql(u8, name, "i32")) return .i32;
+    if (std.mem.eql(u8, name, "i64")) return .i64;
+    if (std.mem.eql(u8, name, "u8")) return .u8;
+    if (std.mem.eql(u8, name, "u16")) return .u16;
+    if (std.mem.eql(u8, name, "u32")) return .u32;
+    if (std.mem.eql(u8, name, "u64")) return .u64;
+    if (std.mem.eql(u8, name, "f32")) return .f32;
+    if (std.mem.eql(u8, name, "f64")) return .f64;
     return error.InvalidField;
+}
+
+fn decodeRepresentation(value: []const u8) ValidationError!Representation {
+    if (std.mem.eql(u8, value, "native")) return .native;
+    if (std.mem.eql(u8, value, "c")) return .c;
+    return error.InvalidField;
+}
+
+fn decodeVisibility(value: []const u8) ValidationError!Visibility {
+    if (std.mem.eql(u8, value, "private")) return .private;
+    if (std.mem.eql(u8, value, "public")) return .public;
+    return error.InvalidField;
+}
+
+fn duplicateString(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
+    return allocator.dupe(u8, value);
 }
 
 fn required(item: std.json.ObjectMap, field: []const u8) ValidationError!std.json.Value {
@@ -157,23 +345,43 @@ fn expectStringEqual(value: std.json.Value, expected: []const u8) ValidationErro
     if (!std.mem.eql(u8, try string(value), expected)) return error.InvalidField;
 }
 
-test "accepts a minimal macOS snapshot" {
+test "decodes JSON into a graph before validation" {
     const snapshot =
-        \\{"protocol":"lil.wire/0","kind":"snapshot","optional_metadata":{},"body":{"id":"module.main","format_version":"lil.cpg/0","language_version":"0.1","target":"aarch64-macos-none","dependencies":[],"declarations":[{"kind":"function","id":"fn.main","name":"main","visibility":"public","parameters":[],"result":"i32","effects":[],"body":{"entry":"entry","blocks":[]}}]}}
+        \\{"protocol":"lil.wire/0","kind":"snapshot","optional_metadata":{},"body":{"id":"module.main","format_version":"lil.cpg/0","language_version":"0.1","target":"aarch64-macos-none","dependencies":[],"declarations":[{"kind":"function","id":"fn.main","name":"main","visibility":"public","parameters":[],"result":"i32","effects":[],"body":{"entry":"entry","blocks":[{"id":"entry"}]}}]}}
     ;
-    try validateSnapshot(std.testing.allocator, snapshot);
+    var decoded = try decodeJsonSnapshot(std.testing.allocator, snapshot);
+    defer decoded.deinit();
+    try std.testing.expectEqual(Target.aarch64_macos, decoded.graph.target);
+    try std.testing.expectEqual(@as(usize, 1), decoded.graph.declarations.len);
+    try validateGraph(decoded.graph, std.testing.allocator);
 }
 
-test "rejects an unsupported target" {
+test "rejects an unsupported wire target" {
     const snapshot =
         \\{"protocol":"lil.wire/0","kind":"snapshot","optional_metadata":{},"body":{"id":"module.main","format_version":"lil.cpg/0","language_version":"0.1","target":"wasm32-freestanding","dependencies":[],"declarations":[]}}
     ;
-    try std.testing.expectError(error.UnsupportedTarget, validateSnapshot(std.testing.allocator, snapshot));
+    try std.testing.expectError(error.UnsupportedTarget, decodeJsonSnapshot(std.testing.allocator, snapshot));
 }
 
-test "rejects duplicate declaration names" {
-    const snapshot =
-        \\{"protocol":"lil.wire/0","kind":"snapshot","optional_metadata":{},"body":{"id":"module.main","format_version":"lil.cpg/0","language_version":"0.1","target":"aarch64-macos-none","dependencies":[],"declarations":[{"kind":"struct","id":"type.one","name":"Thing","repr":"native","fields":[]},{"kind":"struct","id":"type.two","name":"Thing","repr":"native","fields":[]}]}}
-    ;
-    try std.testing.expectError(error.DuplicateDeclarationName, validateSnapshot(std.testing.allocator, snapshot));
+test "graph validation rejects duplicate declaration names" {
+    const declarations = [_]Declaration{
+        .{ .struct_decl = .{ .id = "type.one", .name = "Thing", .repr = .native, .fields = &.{} } },
+        .{ .struct_decl = .{ .id = "type.two", .name = "Thing", .repr = .native, .fields = &.{} } },
+    };
+    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .declarations = &declarations };
+    try std.testing.expectError(error.DuplicateDeclarationName, validateGraph(graph, std.testing.allocator));
+}
+
+test "graph validation rejects a missing entry block" {
+    const declarations = [_]Declaration{.{ .function_decl = .{
+        .id = "fn.main",
+        .name = "main",
+        .visibility = .public,
+        .parameters = &.{},
+        .result = .i32,
+        .effects = &.{},
+        .body = .{ .entry = "entry", .blocks = &.{} },
+    } }};
+    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .declarations = &declarations };
+    try std.testing.expectError(error.MissingEntryBlock, validateGraph(graph, std.testing.allocator));
 }

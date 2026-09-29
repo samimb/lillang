@@ -31,4 +31,17 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run Core IR validator tests");
     test_step.dependOn(&run_tests.step);
+
+    const minimal_example = b.addExecutable(.{
+        .name = "lil-minimal-graph",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/minimal_graph.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "lil", .module = lil }},
+        }),
+    });
+    const run_minimal_example = b.addRunArtifact(minimal_example);
+    const example_step = b.step("example-minimal", "Validate the graph-native minimal example");
+    example_step.dependOn(&run_minimal_example.step);
 }

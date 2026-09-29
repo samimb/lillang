@@ -5,7 +5,7 @@
 
 ## 1. Envelope and canonical encoding
 
-The initial wire encoding is canonical JSON encoded as UTF-8. It exists to make fixtures reviewable; it is not the final compact encoding.
+The initial wire encoding is canonical JSON encoded as UTF-8. It exists to make fixtures reviewable; it is not the final compact encoding. JSON is not LIL source and is not the canonical program representation: a decoder MUST construct a CPG before semantic validation, rendering, editing, or compilation.
 
 Every document is an envelope:
 
