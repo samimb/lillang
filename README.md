@@ -202,6 +202,7 @@ claim general SSA, operation typing, ownership, or code generation.
 ```sh
 zig build test
 zig build run -- check fixtures/valid/minimal-macos.json
+zig build run -- render fixtures/valid/minimal-macos.json
 zig build example-minimal
 ```
 

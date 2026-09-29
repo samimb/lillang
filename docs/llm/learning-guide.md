@@ -14,6 +14,8 @@ specification, the normative specification wins.
    transporting, or editing a graph.
 4. Read the fixture nearest to the intended change. Fixtures are executable
    examples, not alternate specifications.
+5. Run `lil render <snapshot.json>` to inspect the compiler's deterministic
+   projection of a decoded graph. Treat that projection as read-only context.
 
 ## Current implementation boundary
 

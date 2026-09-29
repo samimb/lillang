@@ -113,6 +113,24 @@ MUST have the function's declared result type. Operation IDs are unique within
 a function. These same rules apply regardless of whether a graph was created
 by a model, a Zig API, JSON, or a later binary wire decoder.
 
+### Implemented rendering
+
+The renderer projects this subset deterministically for inspection and model
+context. It is not parseable source and cannot replace the graph:
+
+```text
+module module.example target aarch64-macos-none
+pub fn main() -> i32 {
+  block entry:
+    %op.answer: i32 = const 42
+    return %op.answer[0]
+}
+```
+
+The renderer emits declarations, blocks, and operations in canonical graph
+order. Value references retain their operation ID and result index so a model
+can cite a precise graph object when proposing a transaction.
+
 ## 5. Effects and unsafe calls
 
 ```text

@@ -406,6 +406,74 @@ fn validateBlock(
     }
 }
 
+/// Produces the stable human and model projection for the implemented graph
+/// subset. This is inspection text, not a second source representation.
+pub fn renderGraph(allocator: std.mem.Allocator, graph: Graph) ![]u8 {
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    const writer = &output.writer;
+
+    try writer.print("module {s} target {s}\n", .{ graph.id, graph.target.wireName() });
+    for (graph.declarations) |declaration| {
+        switch (declaration) {
+            .struct_decl => |struct_decl| try renderStruct(writer, struct_decl),
+            .function_decl => |function| try renderFunction(writer, function),
+            .external_function_decl => |external_function| try writer.print(
+                "extern fn {s} -> {s} @c({s}, {s})\n",
+                .{ external_function.name, typeName(external_function.result), external_function.c_symbol, external_function.library },
+            ),
+        }
+    }
+    return output.toOwnedSlice();
+}
+
+fn renderStruct(writer: *std.Io.Writer, struct_decl: StructDeclaration) !void {
+    try writer.print("struct {s} repr({s}) {{\n", .{ struct_decl.name, representationName(struct_decl.repr) });
+    for (struct_decl.fields) |field| try writer.print("  {s}: {s}\n", .{ field.name, typeName(field.type) });
+    try writer.writeAll("}\n");
+}
+
+fn renderFunction(writer: *std.Io.Writer, function: FunctionDeclaration) !void {
+    if (function.visibility == .public) try writer.writeAll("pub ");
+    try writer.print("fn {s}(", .{function.name});
+    for (function.parameters, 0..) |parameter, index| {
+        if (index != 0) try writer.writeAll(", ");
+        try writer.print("{s}: {s}", .{ parameter.name, typeName(parameter.type) });
+    }
+    try writer.print(") -> {s}", .{typeName(function.result)});
+    if (function.effects.len != 0) try writer.writeAll(" ![UnsafeFFI]");
+    try writer.writeAll(" {\n");
+    for (function.body.blocks) |block| {
+        try writer.print("  block {s}:\n", .{block.id});
+        for (block.operations) |operation| try renderOperation(writer, operation);
+    }
+    try writer.writeAll("}\n");
+}
+
+fn renderOperation(writer: *std.Io.Writer, operation: Operation) !void {
+    switch (operation) {
+        .const_integer => |constant| try writer.print(
+            "    %{s}: {s} = const {d}\n",
+            .{ constant.id, typeName(constant.type), constant.value },
+        ),
+        .return_value => |return_value| try writer.print(
+            "    return %{s}[{d}]\n",
+            .{ return_value.value.operation_id, return_value.value.result_index },
+        ),
+    }
+}
+
+fn typeName(type_: ScalarType) []const u8 {
+    return switch (type_) {
+        .unit => "unit", .boolean => "bool", .i8 => "i8", .i16 => "i16", .i32 => "i32", .i64 => "i64",
+        .u8 => "u8", .u16 => "u16", .u32 => "u32", .u64 => "u64", .f32 => "f32", .f64 => "f64",
+    };
+}
+
+fn representationName(repr: Representation) []const u8 {
+    return switch (repr) { .native => "native", .c => "c" };
+}
+
 fn integerFits(value: i64, type_: ScalarType) bool {
     return switch (type_) {
         .i8 => value >= -128 and value <= 127,
@@ -554,4 +622,35 @@ test "graph validation rejects a return with the wrong type" {
     } }};
     const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .declarations = &declarations };
     try std.testing.expectError(error.ReturnTypeMismatch, validateGraph(graph, std.testing.allocator));
+}
+
+test "renders the canonical graph deterministically" {
+    const operations = [_]Operation{
+        .{ .const_integer = .{ .id = "op.answer", .type = .i32, .value = 42 } },
+        .{ .return_value = .{ .id = "term.return", .value = .{ .operation_id = "op.answer", .result_index = 0 } } },
+    };
+    const blocks = [_]Block{.{ .id = "entry", .parameters = &.{}, .operations = &operations }};
+    const declarations = [_]Declaration{.{ .function_decl = .{
+        .id = "fn.main",
+        .name = "main",
+        .visibility = .public,
+        .parameters = &.{},
+        .result = .i32,
+        .effects = &.{},
+        .body = .{ .entry = "entry", .blocks = &blocks },
+    } }};
+    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .declarations = &declarations };
+    const rendered = try renderGraph(std.testing.allocator, graph);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings(
+        \\module module.main target aarch64-macos-none
+        \\pub fn main() -> i32 {
+        \\  block entry:
+        \\    %op.answer: i32 = const 42
+        \\    return %op.answer[0]
+        \\}
+        \\
+    ,
+        rendered,
+    );
 }

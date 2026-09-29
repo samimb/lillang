@@ -4,8 +4,8 @@ const lil = @import("lil");
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
-    if (args.len != 3 or !std.mem.eql(u8, args[1], "check")) {
-        std.debug.print("usage: lil check <snapshot.json>\n", .{});
+    if (args.len != 3) {
+        std.debug.print("usage: lil <check|render> <snapshot.json>\n", .{});
         return error.InvalidArguments;
     }
 
@@ -19,5 +19,16 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("invalid canonical graph: {t}\n", .{err});
         return err;
     };
-    std.debug.print("valid LIL Core IR v0 snapshot\n", .{});
+    if (std.mem.eql(u8, args[1], "check")) {
+        std.debug.print("valid LIL Core IR v0 snapshot\n", .{});
+    } else if (std.mem.eql(u8, args[1], "render")) {
+        const rendered = try lil.renderGraph(allocator, snapshot.graph);
+        var stdout_buffer: [4096]u8 = undefined;
+        var stdout: std.Io.File.Writer = .init(.stdout(), init.io, &stdout_buffer);
+        try stdout.interface.writeAll(rendered);
+        try stdout.interface.flush();
+    } else {
+        std.debug.print("usage: lil <check|render> <snapshot.json>\n", .{});
+        return error.InvalidArguments;
+    }
 }
