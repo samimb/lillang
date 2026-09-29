@@ -22,6 +22,18 @@ Canonical JSON requires UTF-8, no insignificant whitespace, lexicographically so
 
 Unknown fields are rejected everywhere except `optional_metadata`. An unknown required feature is rejected before semantic validation. This avoids silently changing the meaning of a saved program.
 
+The initial JSON mapping for the implemented operation subset is:
+
+```json
+{"id":"entry","parameters":[],"operations":[
+  {"op":"const","id":"op.answer","type":"i32","value":42},
+  {"op":"return","id":"term.return","value":{"operation_id":"op.answer","result_index":0}}
+]}
+```
+
+This is a wire mapping for the `Block`, `ConstInteger`, `Return`, and
+`ValueRef` graph nodes defined by Core IR v0. It is not a textual LIL syntax.
+
 ## 2. Snapshots
 
 A snapshot has a Core IR module as its body. `snapshot_digest` means the digest of that full envelope. The compiler records the snapshot digest, compiler build identity, declared target, and dependency source digests in every build manifest.

@@ -12,6 +12,13 @@ pub const ValidationError = error{
     DuplicateDeclarationName,
     DuplicateBlockId,
     MissingEntryBlock,
+    DuplicateOperationId,
+    MissingTerminator,
+    UnexpectedTerminator,
+    UnknownValue,
+    InvalidResultIndex,
+    ReturnTypeMismatch,
+    ConstantOutOfRange,
 };
 
 /// The canonical program representation. It is independent of JSON, rendering
@@ -65,7 +72,48 @@ pub const StructDeclaration = struct {
     fields: []const Field,
 };
 
-pub const Block = struct { id: []const u8 };
+pub const BlockParameter = struct { id: []const u8, type: ScalarType };
+
+pub const ValueRef = struct {
+    operation_id: []const u8,
+    result_index: u32,
+};
+
+pub const IntegerConstant = struct {
+    id: []const u8,
+    type: ScalarType,
+    value: i64,
+};
+
+pub const Return = struct {
+    id: []const u8,
+    value: ValueRef,
+};
+
+pub const Operation = union(enum) {
+    const_integer: IntegerConstant,
+    return_value: Return,
+
+    pub fn id(self: Operation) []const u8 {
+        return switch (self) {
+            .const_integer => |value| value.id,
+            .return_value => |value| value.id,
+        };
+    }
+
+    pub fn isTerminator(self: Operation) bool {
+        return switch (self) {
+            .return_value => true,
+            else => false,
+        };
+    }
+};
+
+pub const Block = struct {
+    id: []const u8,
+    parameters: []const BlockParameter,
+    operations: []const Operation,
+};
 
 pub const FunctionBody = struct {
     entry: []const u8,
@@ -238,12 +286,59 @@ fn decodeBody(allocator: std.mem.Allocator, item: std.json.ObjectMap) !FunctionB
     const blocks = try allocator.alloc(Block, blocks_json.items.len);
     for (blocks_json.items, 0..) |value, index| {
         const block = try object(value);
-        blocks[index] = .{ .id = try duplicateString(allocator, try string(try required(block, "id"))) };
+        blocks[index] = try decodeBlock(allocator, block);
     }
     return .{
         .entry = try duplicateString(allocator, try string(try required(item, "entry"))),
         .blocks = blocks,
     };
+}
+
+fn decodeBlock(allocator: std.mem.Allocator, item: std.json.ObjectMap) !Block {
+    const parameters_json = try array(try required(item, "parameters"));
+    const parameters = try allocator.alloc(BlockParameter, parameters_json.items.len);
+    for (parameters_json.items, 0..) |value, index| {
+        const parameter = try object(value);
+        parameters[index] = .{
+            .id = try duplicateString(allocator, try string(try required(parameter, "id"))),
+            .type = try decodeType(try required(parameter, "type")),
+        };
+    }
+
+    const operations_json = try array(try required(item, "operations"));
+    const operations = try allocator.alloc(Operation, operations_json.items.len);
+    for (operations_json.items, 0..) |value, index| {
+        operations[index] = try decodeOperation(allocator, try object(value));
+    }
+    return .{
+        .id = try duplicateString(allocator, try string(try required(item, "id"))),
+        .parameters = parameters,
+        .operations = operations,
+    };
+}
+
+fn decodeOperation(allocator: std.mem.Allocator, item: std.json.ObjectMap) !Operation {
+    const op = try string(try required(item, "op"));
+    if (std.mem.eql(u8, op, "const")) {
+        return .{ .const_integer = .{
+            .id = try duplicateString(allocator, try string(try required(item, "id"))),
+            .type = try decodeType(try required(item, "type")),
+            .value = try integer(try required(item, "value")),
+        } };
+    }
+    if (std.mem.eql(u8, op, "return")) {
+        const value = try object(try required(item, "value"));
+        const raw_index = try integer(try required(value, "result_index"));
+        if (raw_index < 0 or raw_index > std.math.maxInt(u32)) return error.InvalidField;
+        return .{ .return_value = .{
+            .id = try duplicateString(allocator, try string(try required(item, "id"))),
+            .value = .{
+                .operation_id = try duplicateString(allocator, try string(try required(value, "operation_id"))),
+                .result_index = @intCast(raw_index),
+            },
+        } };
+    }
+    return error.InvalidField;
 }
 
 /// Validates canonical graph semantics. Future CBOR or binary decoders call
@@ -269,11 +364,60 @@ pub fn validateGraph(graph: Graph, allocator: std.mem.Allocator) !void {
 fn validateFunction(function: FunctionDeclaration, allocator: std.mem.Allocator) !void {
     var block_ids = std.StringHashMap(void).init(allocator);
     defer block_ids.deinit();
+    var operation_ids = std.StringHashMap(void).init(allocator);
+    defer operation_ids.deinit();
     for (function.body.blocks) |block| {
         if (block_ids.contains(block.id)) return error.DuplicateBlockId;
         try block_ids.put(block.id, {});
+        try validateBlock(block, function.result, &operation_ids, allocator);
     }
     if (!block_ids.contains(function.body.entry)) return error.MissingEntryBlock;
+}
+
+fn validateBlock(
+    block: Block,
+    function_result: ScalarType,
+    operation_ids: *std.StringHashMap(void),
+    allocator: std.mem.Allocator,
+) !void {
+    if (block.operations.len == 0) return error.MissingTerminator;
+
+    var values = std.StringHashMap(ScalarType).init(allocator);
+    defer values.deinit();
+
+    for (block.operations, 0..) |operation, index| {
+        if (operation_ids.contains(operation.id())) return error.DuplicateOperationId;
+        try operation_ids.put(operation.id(), {});
+
+        if (operation.isTerminator() and index + 1 != block.operations.len) return error.UnexpectedTerminator;
+        if (!operation.isTerminator() and index + 1 == block.operations.len) return error.MissingTerminator;
+
+        switch (operation) {
+            .const_integer => |constant| {
+                if (!integerFits(constant.value, constant.type)) return error.ConstantOutOfRange;
+                try values.put(constant.id, constant.type);
+            },
+            .return_value => |return_value| {
+                if (return_value.value.result_index != 0) return error.InvalidResultIndex;
+                const value_type = values.get(return_value.value.operation_id) orelse return error.UnknownValue;
+                if (value_type != function_result) return error.ReturnTypeMismatch;
+            },
+        }
+    }
+}
+
+fn integerFits(value: i64, type_: ScalarType) bool {
+    return switch (type_) {
+        .i8 => value >= -128 and value <= 127,
+        .i16 => value >= -32768 and value <= 32767,
+        .i32 => value >= -2147483648 and value <= 2147483647,
+        .i64 => true,
+        .u8 => value >= 0 and value <= 255,
+        .u16 => value >= 0 and value <= 65535,
+        .u32 => value >= 0 and value <= 4294967295,
+        .u64 => value >= 0,
+        else => false,
+    };
 }
 
 fn decodeTarget(value: []const u8) ValidationError!Target {
@@ -341,13 +485,20 @@ fn string(value: std.json.Value) ValidationError![]const u8 {
     };
 }
 
+fn integer(value: std.json.Value) ValidationError!i64 {
+    return switch (value) {
+        .integer => |item| item,
+        else => error.InvalidField,
+    };
+}
+
 fn expectStringEqual(value: std.json.Value, expected: []const u8) ValidationError!void {
     if (!std.mem.eql(u8, try string(value), expected)) return error.InvalidField;
 }
 
-test "decodes JSON into a graph before validation" {
+test "decodes and validates a typed constant and return" {
     const snapshot =
-        \\{"protocol":"lil.wire/0","kind":"snapshot","optional_metadata":{},"body":{"id":"module.main","format_version":"lil.cpg/0","language_version":"0.1","target":"aarch64-macos-none","dependencies":[],"declarations":[{"kind":"function","id":"fn.main","name":"main","visibility":"public","parameters":[],"result":"i32","effects":[],"body":{"entry":"entry","blocks":[{"id":"entry"}]}}]}}
+        \\{"protocol":"lil.wire/0","kind":"snapshot","optional_metadata":{},"body":{"id":"module.main","format_version":"lil.cpg/0","language_version":"0.1","target":"aarch64-macos-none","dependencies":[],"declarations":[{"kind":"function","id":"fn.main","name":"main","visibility":"public","parameters":[],"result":"i32","effects":[],"body":{"entry":"entry","blocks":[{"id":"entry","parameters":[],"operations":[{"op":"const","id":"op.answer","type":"i32","value":42},{"op":"return","id":"term.return","value":{"operation_id":"op.answer","result_index":0}}]}]}}]}}
     ;
     var decoded = try decodeJsonSnapshot(std.testing.allocator, snapshot);
     defer decoded.deinit();
@@ -384,4 +535,23 @@ test "graph validation rejects a missing entry block" {
     } }};
     const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .declarations = &declarations };
     try std.testing.expectError(error.MissingEntryBlock, validateGraph(graph, std.testing.allocator));
+}
+
+test "graph validation rejects a return with the wrong type" {
+    const operations = [_]Operation{
+        .{ .const_integer = .{ .id = "op.value", .type = .i64, .value = 42 } },
+        .{ .return_value = .{ .id = "term.return", .value = .{ .operation_id = "op.value", .result_index = 0 } } },
+    };
+    const blocks = [_]Block{.{ .id = "entry", .parameters = &.{}, .operations = &operations }};
+    const declarations = [_]Declaration{.{ .function_decl = .{
+        .id = "fn.main",
+        .name = "main",
+        .visibility = .public,
+        .parameters = &.{},
+        .result = .i32,
+        .effects = &.{},
+        .body = .{ .entry = "entry", .blocks = &blocks },
+    } }};
+    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .declarations = &declarations };
+    try std.testing.expectError(error.ReturnTypeMismatch, validateGraph(graph, std.testing.allocator));
 }

@@ -22,7 +22,9 @@ The bootstrap verifier decodes a `lil.wire/0` snapshot envelope into a typed
 adapter; it is not a source language or a semantic data structure. The current
 validator checks versions, the declared target, required fields, declaration
 IDs and names, declaration shapes, scalar types, entry-block identity, and the
-v0 `UnsafeFFI` effect.
+v0 `UnsafeFFI` effect. It also validates the implemented `const` → `return`
+operation path: integer range, operation identity, terminator position, local
+SSA reference, result index, and return type.
 
 It does **not** yet validate operation schemas, SSA dominance, block edges,
 effect propagation, layout, ownership, borrow lifetimes, cleanup, async, or
@@ -40,6 +42,8 @@ properties; consult the phase and rule stated in the diagnostic or spec.
 - Use only the currently defined scalar types unless the Core IR version adds a
   feature-gated extension.
 - Treat `UnsafeFFI` as an explicit boundary. It is never inferred.
+- A `const` creates result index `0`; a `return` must be the final operation
+  and must refer to an earlier local result of the function's declared type.
 - Prefer a minimal valid graph construction or fixture before proposing a new
   graph construct.
 

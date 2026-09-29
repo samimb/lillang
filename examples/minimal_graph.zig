@@ -3,7 +3,19 @@ const lil = @import("lil");
 
 // This is a canonical graph constructed directly in code. It is not parsed
 // from JSON and demonstrates the representation models and tools work with.
-const entry_blocks = [_]lil.Block{.{ .id = "block.entry" }};
+const entry_operations = [_]lil.Operation{
+    .{ .const_integer = .{ .id = "op.answer", .type = .i32, .value = 42 } },
+    .{ .return_value = .{
+        .id = "term.return",
+        .value = .{ .operation_id = "op.answer", .result_index = 0 },
+    } },
+};
+
+const entry_blocks = [_]lil.Block{.{
+    .id = "block.entry",
+    .parameters = &.{},
+    .operations = &entry_operations,
+}};
 
 const declarations = [_]lil.Declaration{.{ .function_decl = .{
     .id = "fn.main",

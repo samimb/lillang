@@ -195,9 +195,9 @@ Initial Phase 0 artifacts:
 The initial verifier is a dependency-free Zig project. Its JSON wire adapter
 decodes a versioned snapshot into a typed canonical graph; graph validation
 then checks supported targets, declaration identity, entry blocks, and the
-structural shape of the Phase 0 type/function subset. JSON is not a source
+first typed operation path (`const` and `return`). JSON is not a source
 language or canonical representation. The verifier intentionally does not yet
-claim to validate SSA, operation typing, ownership, or code generation.
+claim general SSA, operation typing, ownership, or code generation.
 
 ```sh
 zig build test

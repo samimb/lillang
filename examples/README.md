@@ -6,8 +6,9 @@ surface-language samples and do not require a model to emit JSON.
 ## Minimal graph
 
 [`minimal_graph.zig`](minimal_graph.zig) constructs a module containing a
-public `main` declaration and one entry block, then passes that `Graph` to the
-semantic validator.
+public `main` declaration, one entry block, an `i32` constant, and a typed
+return of that constant. It then passes the canonical `Graph` to the semantic
+validator.
 
 Run it with:
 

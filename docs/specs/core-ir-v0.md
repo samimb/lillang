@@ -85,6 +85,34 @@ The permitted v0 operations are:
 
 `result.unwrap_or_branch value, ok_block(args...), err_block(args...)` is a terminator. `value` must be `result<O, E>`; the first argument on the ok edge is `O`, and the first argument on the error edge is `E`. Remaining arguments are checked like `br`. This is the sole `Result` control-flow primitive in v0.
 
+### Implemented operation subset
+
+The following node schema is implemented by the Phase 0 verifier. It is a
+strict subset of the table above; an operation absent here is specified but not
+yet accepted by the bootstrap implementation.
+
+```text
+Block {
+  id: BlockId,
+  parameters: List<BlockParameter>,
+  operations: NonEmptyList<Operation>
+}
+BlockParameter { id: ValueId, type: ScalarType }
+
+Operation = ConstInteger | Return
+ConstInteger { id: OperationId, type: IntegerType, value: i64 }
+Return { id: OperationId, value: ValueRef }
+ValueRef { operation_id: OperationId, result_index: u32 }
+```
+
+`ConstInteger` has one result at index `0`. Its signed `i64` wire value MUST
+fit the selected integer type. `Return` is a terminator and has no result. It
+MUST be the final operation of its block. Its `ValueRef` currently resolves
+only to an earlier operation in the same block, MUST use result index `0`, and
+MUST have the function's declared result type. Operation IDs are unique within
+a function. These same rules apply regardless of whether a graph was created
+by a model, a Zig API, JSON, or a later binary wire decoder.
+
 ## 5. Effects and unsafe calls
 
 ```text
