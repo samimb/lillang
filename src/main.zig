@@ -4,8 +4,9 @@ const lil = @import("lil");
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
-    if (args.len != 3) {
-        std.debug.print("usage: lil <check|render|eval|encode|digest> <snapshot.json>\n", .{});
+    const is_rename = args.len == 5 and std.mem.eql(u8, args[1], "propose-rename");
+    if ((args.len != 3 and !is_rename) or args.len < 3) {
+        std.debug.print("usage: lil <check|render|eval|encode|digest> <snapshot.json>\n       lil propose-rename <snapshot.json> <declaration-id> <new-name>\n", .{});
         return error.InvalidArguments;
     }
 
@@ -49,8 +50,22 @@ pub fn main(init: std.process.Init) !void {
         try stdout.interface.writeAll(&digest);
         try stdout.interface.writeAll("\n");
         try stdout.interface.flush();
+    } else if (is_rename) {
+        const base_digest = try lil.graphDigest(allocator, snapshot.graph);
+        const renames = [_]lil.RenameDeclaration{.{ .id = args[3], .new_name = args[4] }};
+        var candidate = try lil.applyTransaction(allocator, snapshot.graph, .{
+            .base_digest = base_digest,
+            .renames = &renames,
+        });
+        defer candidate.deinit();
+        const encoded = try lil.encodeJsonSnapshot(allocator, candidate.graph);
+        var stdout_buffer: [4096]u8 = undefined;
+        var stdout: std.Io.File.Writer = .init(.stdout(), init.io, &stdout_buffer);
+        try stdout.interface.writeAll(encoded);
+        try stdout.interface.writeAll("\n");
+        try stdout.interface.flush();
     } else {
-        std.debug.print("usage: lil <check|render|eval|encode|digest> <snapshot.json>\n", .{});
+        std.debug.print("usage: lil <check|render|eval|encode|digest> <snapshot.json>\n       lil propose-rename <snapshot.json> <declaration-id> <new-name>\n", .{});
         return error.InvalidArguments;
     }
 }

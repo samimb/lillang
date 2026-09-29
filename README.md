@@ -210,6 +210,7 @@ zig build run -- render fixtures/valid/minimal-macos.json
 zig build run -- eval fixtures/valid/minimal-macos.json
 zig build run -- encode fixtures/valid/minimal-macos.json
 zig build run -- digest fixtures/valid/minimal-macos.json
+zig build run -- propose-rename fixtures/valid/minimal-macos.json fn.main app_main
 zig build example-minimal
 ```
 

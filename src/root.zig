@@ -31,6 +31,24 @@ pub const Diagnostic = struct {
     rule: []const u8,
 };
 
+pub const TransactionError = error{
+    StaleBase,
+    UnknownDeclaration,
+    InvalidResultingGraph,
+};
+
+pub const RenameDeclaration = struct {
+    id: []const u8,
+    new_name: []const u8,
+};
+
+/// The first implemented transaction operation. The fixed base digest prevents
+/// accidentally applying an otherwise-valid edit to a different graph state.
+pub const Transaction = struct {
+    base_digest: [64]u8,
+    renames: []const RenameDeclaration,
+};
+
 /// The canonical program representation. It is independent of JSON, rendering
 /// syntax, model handles, and storage format.
 pub const Graph = struct {
@@ -191,18 +209,24 @@ pub const Declaration = union(enum) {
 /// Owns the memory for a graph decoded from a wire representation. Graphs
 /// constructed directly in Zig can use static or caller-owned memory instead.
 pub const DecodedSnapshot = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: *std.heap.ArenaAllocator,
     graph: Graph,
 
     pub fn deinit(self: *DecodedSnapshot) void {
+        const backing_allocator = self.arena.child_allocator;
         self.arena.deinit();
+        backing_allocator.destroy(self.arena);
     }
 };
 
 /// Decodes v0 JSON into the canonical graph. JSON ends at this adapter.
 pub fn decodeJsonSnapshot(backing_allocator: std.mem.Allocator, bytes: []const u8) !DecodedSnapshot {
-    var arena = std.heap.ArenaAllocator.init(backing_allocator);
-    errdefer arena.deinit();
+    const arena = try backing_allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(backing_allocator);
+    errdefer {
+        arena.deinit();
+        backing_allocator.destroy(arena);
+    }
     const allocator = arena.allocator();
 
     const document = try std.json.parseFromSliceLeaky(std.json.Value, allocator, bytes, .{});
@@ -428,6 +452,52 @@ pub fn snapshotDigest(bytes: []const u8) [64]u8 {
         result[index * 2 + 1] = alphabet[byte & 0x0f];
     }
     return result;
+}
+
+pub fn graphDigest(allocator: std.mem.Allocator, graph: Graph) ![64]u8 {
+    const encoded = try encodeJsonSnapshot(allocator, graph);
+    defer allocator.free(encoded);
+    return snapshotDigest(encoded);
+}
+
+/// Applies a transaction to an isolated clone of `graph`. The supplied graph is
+/// never modified. A candidate is returned only after all edits and canonical
+/// graph validation succeed.
+pub fn applyTransaction(
+    backing_allocator: std.mem.Allocator,
+    graph: Graph,
+    transaction: Transaction,
+) !DecodedSnapshot {
+    const actual_digest = try graphDigest(backing_allocator, graph);
+    if (!std.mem.eql(u8, &actual_digest, &transaction.base_digest)) return error.StaleBase;
+
+    const encoded = try encodeJsonSnapshot(backing_allocator, graph);
+    defer backing_allocator.free(encoded);
+    var candidate = try decodeJsonSnapshot(backing_allocator, encoded);
+    errdefer candidate.deinit();
+
+    const declarations: []Declaration = @constCast(candidate.graph.declarations);
+    for (transaction.renames) |rename| {
+        var found = false;
+        for (declarations) |*declaration| {
+            if (std.mem.eql(u8, declaration.id(), rename.id)) {
+                renameDeclaration(declaration, try candidate.arena.allocator().dupe(u8, rename.new_name));
+                found = true;
+                break;
+            }
+        }
+        if (!found) return error.UnknownDeclaration;
+    }
+    if (try diagnoseGraph(candidate.graph, candidate.arena.allocator())) |_| return error.InvalidResultingGraph;
+    return candidate;
+}
+
+fn renameDeclaration(declaration: *Declaration, new_name: []const u8) void {
+    switch (declaration.*) {
+        .struct_decl => |*value| value.name = new_name,
+        .function_decl => |*value| value.name = new_name,
+        .external_function_decl => |*value| value.name = new_name,
+    }
 }
 
 fn writeKey(writer: *std.Io.Writer, key: []const u8) !void {
@@ -1090,4 +1160,38 @@ test "canonical JSON round trips and has a stable digest" {
 
     try std.testing.expectEqualStrings(first, second);
     try std.testing.expectEqual(snapshotDigest(first), snapshotDigest(second));
+}
+
+test "transaction renames on an isolated graph with a matching base" {
+    const snapshot =
+        \\{"protocol":"lil.wire/0","kind":"snapshot","optional_metadata":{},"body":{"id":"module.main","format_version":"lil.cpg/0","language_version":"0.1","target":"aarch64-macos-none","dependencies":[],"declarations":[{"kind":"function","id":"fn.main","name":"main","visibility":"public","parameters":[],"result":"i32","effects":[],"body":{"entry":"entry","blocks":[{"id":"entry","parameters":[],"operations":[{"op":"const","id":"op.answer","type":"i32","value":42},{"op":"return","id":"term.return","value":{"operation_id":"op.answer","result_index":0}}]}]}}]}}
+    ;
+    var original = try decodeJsonSnapshot(std.testing.allocator, snapshot);
+    defer original.deinit();
+    const base_digest = try graphDigest(std.testing.allocator, original.graph);
+    const renames = [_]RenameDeclaration{.{ .id = "fn.main", .new_name = "renamed_main" }};
+    var candidate = try applyTransaction(std.testing.allocator, original.graph, .{
+        .base_digest = base_digest,
+        .renames = &renames,
+    });
+    defer candidate.deinit();
+
+    try std.testing.expectEqualStrings("main", original.graph.declarations[0].name());
+    try std.testing.expectEqualStrings("renamed_main", candidate.graph.declarations[0].name());
+}
+
+test "transaction rejects a stale base before applying edits" {
+    const declarations = [_]Declaration{.{ .struct_decl = .{
+        .id = "type.one",
+        .name = "Original",
+        .repr = .native,
+        .fields = &.{},
+    } }};
+    const graph = Graph{ .id = "module.main", .target = .aarch64_macos, .dependencies = &.{}, .declarations = &declarations };
+    const renames = [_]RenameDeclaration{.{ .id = "type.one", .new_name = "Changed" }};
+    try std.testing.expectError(error.StaleBase, applyTransaction(std.testing.allocator, graph, .{
+        .base_digest = [_]u8{0} ** 64,
+        .renames = &renames,
+    }));
+    try std.testing.expectEqualStrings("Original", graph.declarations[0].name());
 }

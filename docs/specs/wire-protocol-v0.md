@@ -67,6 +67,18 @@ Precondition = object_digest | declaration_name_unused | reference_absent
 
 The transaction operation sequence applies to an isolated copy of its base snapshot. Preconditions are evaluated against that copy at the point they appear. The resulting graph must satisfy all Core IR validity rules. On success, it becomes one new snapshot; on failure, no edit is visible.
 
+The bootstrap implementation provides the first of these operations,
+declaration `rename`, through the typed Zig `Transaction` API and the
+non-persistent command:
+
+```sh
+lil propose-rename <snapshot.json> <declaration-id> <new-name>
+```
+
+It computes the canonical base digest, clones the graph, applies the rename,
+validates the candidate, and writes its canonical JSON only on success. A
+future wire transaction decoder will use the same graph transaction operation.
+
 ## 4. Concurrency and conflicts
 
 `commit(base_snapshot_digest, transaction)` succeeds only when `base_snapshot_digest` equals the service's current snapshot digest. A mismatch returns `STALE_BASE` with the current digest and a summary of objects changed since the supplied base when retained history permits it. The service does not automatically merge transactions in v0.

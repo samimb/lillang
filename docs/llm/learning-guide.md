@@ -19,6 +19,9 @@ specification, the normative specification wins.
 6. Use `lil digest <snapshot.json>` as an edit base only after the document has
    been decoded and canonically re-encoded. A graph hash identifies a graph
    revision; it is never a symbol name or a model-local handle.
+7. Treat graph edits as transactions. The current `propose-rename` command is
+   non-persistent and returns a candidate only after its base digest and graph
+   validation both succeed.
 
 ## Current implementation boundary
 
