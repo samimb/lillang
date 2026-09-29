@@ -9,6 +9,14 @@ pub fn main(init: std.process.Init) !void {
     const token_ids = try parseTokenIds(allocator, args[2]);
     defer allocator.free(token_ids);
 
+    if (std.mem.eql(u8, args[1], "lower-function-graph-v1")) {
+        var program = try lil.decodeFunctionGraphV1(allocator, .aarch64_macos, token_ids);
+        defer program.deinit();
+        const llvm_ir = try lil.lowerFunctionGraphV1ToLlvm(allocator, program.graph);
+        defer allocator.free(llvm_ir);
+        return writeStdout(init, llvm_ir);
+    }
+
     if (std.mem.eql(u8, args[1], "legal-next-token-ids")) {
         var decoder = try lil.SemanticDecoder.init(allocator, .aarch64_macos, token_ids.len);
         defer decoder.deinit();
@@ -110,7 +118,7 @@ fn writeStdout(init: std.process.Init, bytes: []const u8) !void {
 
 fn usage() error{InvalidArguments} {
     std.debug.print(
-        "usage: lil <check-token-ids|render-token-ids|eval-token-ids|lower-token-ids|legal-next-token-ids> <comma-separated-u16-ids|->\n",
+        "usage: lil <lower-function-graph-v1|check-token-ids|render-token-ids|eval-token-ids|lower-token-ids|legal-next-token-ids> <comma-separated-u16-ids|->\n",
         .{},
     );
     return error.InvalidArguments;

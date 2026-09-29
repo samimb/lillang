@@ -1355,6 +1355,38 @@ pub fn lowerMainToLlvm(allocator: std.mem.Allocator, graph: Graph) ![]u8 {
     return error.InvalidEntryFunction;
 }
 
+/// Backend-only lowering for the first anonymous function graph. `lil_entry`
+/// is supplied by the build invocation; it is not present in model tokens or
+/// the latent graph.
+pub fn lowerFunctionGraphV1ToLlvm(allocator: std.mem.Allocator, graph: Graph) ![]u8 {
+    try validateGraph(graph, allocator);
+    if (graph.declarations.len != 1) return error.InvalidEntryFunction;
+    const function = switch (graph.declarations[0]) {
+        .function_decl => |value| value,
+        else => return error.InvalidEntryFunction,
+    };
+    if (function.parameters.len != 2 or function.parameters[0].type != .i64 or function.parameters[1].type != .i64 or function.result != .i64) return error.InvalidEntryFunction;
+    const block = function.body.blocks[0];
+    if (block.operations.len != 2) return error.InvalidEntryFunction;
+    const add = switch (block.operations[0]) {
+        .wrapping_add => |value| value,
+        else => return error.InvalidEntryFunction,
+    };
+    const result = switch (block.operations[1]) {
+        .return_value => |value| value,
+        else => return error.InvalidEntryFunction,
+    };
+    if (!std.mem.eql(u8, add.left.operation_id, "latent.arg.0") or !std.mem.eql(u8, add.right.operation_id, "latent.arg.1") or !std.mem.eql(u8, result.value.operation_id, add.id)) return error.InvalidEntryFunction;
+    return allocator.dupe(u8,
+        \\define i64 @lil_entry(i64 %arg0, i64 %arg1) {
+        \\entry:
+        \\  %v0 = add i64 %arg0, %arg1
+        \\  ret i64 %v0
+        \\}
+        \\
+    );
+}
+
 fn llvmType(type_: ScalarType) []const u8 {
     return switch (type_) {
         .i8, .u8 => "i8",

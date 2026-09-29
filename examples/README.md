@@ -17,6 +17,8 @@ semantic shape that a token ABI must eventually encode:
 - [`fetch_user.lil`](fetch_user.lil) — result propagation and HTTP/serde effects.
 - [`retry_timeout.lil`](retry_timeout.lil) — retry and timeout policy.
 - [`parallel_lookup.lil`](parallel_lookup.lil) — structured parallel composition.
+- [`add_i64-comparison.md`](add_i64-comparison.md) — end-to-end LIL/C prompt,
+  debugger, compiler, performance, and token-accounting comparison.
 
 ```sh
 # Retired backend-only `lil.token/0` smoke test; not the model ABI.
