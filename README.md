@@ -1,17 +1,17 @@
-# LIL: an LLM-native systems language
+# LIL: a latent ISA for LLM-native programming
 
-**Status:** design draft 0.1, 29 September 2026  
+**Status:** design reset 0.2, 29 September 2026
 **Working name:** LIL (Latent Intermediate Language)  
 **Audience:** compiler implementers, model and tooling authors, backend developers  
 **Normative language:** `MUST`, `SHOULD`, and `MAY` describe intended requirements. This draft is not a claim that an implementation exists.
 
 ## 1. Thesis
 
-LIL is a general-purpose, statically typed language whose primary authoring interface is a model operating on structured program edits. Its canonical artifact is a versioned, typed program graph. A textual rendering exists for inspection, debugging, review, and implementation by LLMs. The compiler emits native code and exposes an explicit C ABI boundary.
+LIL is not a better textual language for models to write. Its primary authoring representation is a model-specific stream of constrained semantic tokens that decodes directly into a versioned, typed latent program graph. The graph is the source artifact. A textual rendering is a disassembler for humans and model context, never the source language.
 
-The aim is to make the *amount of information a model must emit to specify a correct change* small without making the resulting program slow or restricting it to a domain-specific subset. This is a language for services, command-line tools, libraries, agents, and performance-sensitive backend components, including networking, databases, concurrency, and operating-system interfaces.
+The aim is to minimize the information a model must emit to uniquely specify or patch a correct program: semantic output tokens, retrieved context, retries, tool calls, and validation cost. Native and WASM backends are targets of the graph, not the reason to preserve human-language conventions.
 
-LIL does not assume that dense syntax alone saves tokens. It measures complete workflows, including retrieved definitions, retries, compiler diagnostics, and patches. It also does not assume that type safety or an SSA graph automatically creates fast machine code. These are hypotheses to test against native-language baselines.
+The design authority is [Latent ISA v0](docs/specs/latent-isa-v0.md). Earlier Core IR, wire, and LLVM documents describe exploratory infrastructure and yield to that specification where they conflict.
 
 ## 2. Design goals and constraints
 
@@ -19,14 +19,14 @@ LIL does not assume that dense syntax alone saves tokens. It measures complete w
 | --- | --- |
 | Runtime | Native executables and libraries with predictable performance; no mandatory garbage collector or VM. |
 | Expressiveness | Full backend applications, systems interfaces, generic data structures, asynchronous I/O, and native dependencies. |
-| Authoring | Structured create and edit operations with incremental type checking and constrained choices when practical. |
+| Authoring | Context-sensitive semantic token decoding, scoped symbol memory, and atomic graph patches. |
 | Reproducibility | Identical canonical input, compiler version, target, and declared dependencies produce equivalent output. |
-| Inspection | Every program can be rendered as readable, stable text with types, effects, ownership, source provenance, and FFI boundaries. |
+| Inspection | A deterministic disassembly for review and debugging; human readability is not an authoring requirement. |
 | Safety | Safe core, explicit unsafe boundaries, no implicit I/O, and checked errors. |
 | Portability | An implementation starts with a narrow target matrix and expands through explicit target support. |
 | Interop | Import C headers and link C libraries through a usable generated interface. |
 
-Initial non-goals: a custom CPU instruction set, a novel cryptography implementation, a new native code generator, and perfect prevention of semantic mistakes by constrained decoding. Human editing of the rendered form can be supported later, but round-trip text editing is not required for the first compiler.
+Initial non-goals: a human-oriented surface syntax, round-trip text editing, a novel cryptography implementation, and perfect prevention of semantic mistakes. The token ABI and constrained decoder are first-class language components.
 
 ## 3. Representation and versioning
 
@@ -34,7 +34,7 @@ Three layers are distinct:
 
 1. **Canonical program graph (CPG):** a language-defined typed module graph with functions, types, constants, control regions, effects, and dependency references. This is the authoritative source.
 2. **Wire format:** a portable, versioned serialization of the CPG and atomic edit transactions. An initial implementation can use a conventional schema format. Compact binary encoding comes after the semantics stabilize.
-3. **Model projection:** a context-dependent stream of available operations, symbol handles, type signatures, documentation, and compiler feedback. A tokenizer-specific vocabulary MAY encode frequent operations as single model tokens. Token IDs MUST NOT be the only durable representation.
+3. **Model token ABI and projection:** a context-dependent stream of legal semantic token IDs, compact handles, type signatures, documentation, and feedback. Token IDs MAY be the immediate program representation for an exact tokenizer/ABI version; commits retain the decoded graph and ABI metadata for durability.
 
 The graph MUST record a format version, feature set, dependency lock, target assumptions, and compiler language version. Unknown required features cause rejection. Unknown optional metadata can be retained without changing semantics. Semantic identities are derived from module identity and exported symbol identity. Short handles such as `F17` are local to a model session and MUST be resolved before saving. Public interfaces have stable, readable names for linking and diagnostics even when internal locals do not.
 

@@ -1,14 +1,15 @@
 # LIL examples
 
-Each example has two views of the same program:
+Each example has three distinct views:
 
-- `*.json` is the current canonical graph wire snapshot, consumed by the verifier, interpreter, and bootstrap compiler.
-- `*.lil` is the deterministic human/LLM projection of that graph. It is the readable LIL code view, not an independent editable source format.
+- [`latent-isa.md`](latent-isa.md) shows the intended model-facing semantic-token and constrained-decoder form.
+- `*.json` is temporary graph wire transport for the current prototype, not LIL source.
+- `*.lil` is the deterministic human disassembly of that graph, not an independent editable source format.
 
 | Example | Demonstrates |
 | --- | --- |
-| [`arithmetic.lil`](arithmetic.lil) | typed constants, wrapping addition, and a return value |
-| [`wraparound.lil`](wraparound.lil) | explicit `i8` modular overflow semantics |
+| [`arithmetic.lil`](arithmetic.lil) | graph disassembly for typed constants, wrapping addition, and a return value |
+| [`wraparound.lil`](wraparound.lil) | graph disassembly for explicit `i8` modular overflow semantics |
 
 ```sh
 zig build run -- render examples/arithmetic.json
