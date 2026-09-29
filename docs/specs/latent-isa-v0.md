@@ -31,6 +31,55 @@ representation for a compatible model, but a commit MUST also record the
 decoded graph and exact token-ABI version so it remains reproducible after a
 tokenizer changes.
 
+### 2.1 Implemented ABI: `lil.token/0`
+
+The first executable ABI is intentionally narrow. A token is an unsigned
+16-bit ID. Numeric spelling, commas, and whitespace are tools for inspecting a
+stream; they are not LIL syntax. The ranges and IDs below are normative for
+`lil.token/0`.
+
+| Token ID or range | Meaning | Legal decoder state |
+| --- | --- | --- |
+| `1` | begin one module | start |
+| `2` | end the module | after a completed function |
+| `16` | begin the sole `main() -> i32` function | module body |
+| `17` | end that function | after its return |
+| `32` | append `const i32`; request one literal token | function body |
+| `33` | append wrapping `add i32`; request two local `i32` references | function body |
+| `34` | append `return i32`; request one local `i32` reference | function body |
+| `4096..8191` | signed 12-bit `i32` literal; `id - 6144` | immediately after `32` |
+| `12288..16383` | local value reference `id - 12288` | only in a requested `i32` operand slot |
+
+`lil.token/0` accepts exactly one function, no parameters, no effects, and one
+return. Every `const` and `add` appends one value to the local value table.
+Reference token `12288 + n` is legal only when value `n` already exists and
+has the required `i32` type. Therefore an add after two constants admits only
+`12288` and `12289`, not a guessed name, a future value, an integer literal, or
+an arbitrary token.
+
+The complete vector for `main() -> i32 { return wrapping_add(20, 22) }` is:
+
+```text
+1 16 32 6164 32 6166 33 12288 12289 34 12290 17 2
+```
+
+The decoder translates it directly into typed graph nodes, assigns stable
+graph identities, validates the result, and records `lil.token/0` with the
+commit. It never parses a source string.
+
+### 2.2 Required decoder behavior
+
+Before sampling each model token, the compiler service MUST expose a
+`NextTokenConstraint` derived from decoder state. In `lil.token/0` that is one
+of: an exact finite ID set, the literal range, a type-filtered local-reference
+range, or terminal. A service MUST reject an out-of-constraint ID before graph
+construction. Final graph validation remains mandatory after the stream closes.
+
+An ABI extension MUST allocate new stable IDs or ranges, state the exact legal
+decoder transitions, define result types/effects/failure behavior, and add
+positive and negative decoder tests. It MUST NOT assign semantic meaning by
+parsing a human-rendered name.
+
 ## 3. Latent graph model
 
 The graph is immutable, SSA-like, type-directed, and effect-aware. Values are
@@ -70,9 +119,9 @@ calls, compile time, and human review effort.
 
 ## 6. Current prototype boundary
 
-The Zig prototype currently validates a tiny typed graph subset, renders a
-disassembly, applies a rename transaction, and lowers straight-line integer
-arithmetic to LLVM IR. It is useful infrastructure only. JSON is a temporary
-test wire adapter; its syntax and the rendered `.lil` view are not LIL source.
-The next implementation priority is a token-ABI registry and constrained
-decoder, not broader conventional-language syntax or backend features.
+The Zig prototype now decodes the first raw token-ID subset directly into a
+tiny typed graph, reports legal-next-token constraints, renders a disassembly,
+and lowers straight-line integer arithmetic to LLVM IR. The graph and backend
+remain supporting infrastructure. Human renderings are not LIL source. The next
+implementation priority is broadening the token ABI and constrained decoder,
+not adding conventional-language syntax or a new wire format.

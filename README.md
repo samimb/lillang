@@ -181,24 +181,28 @@ Each phase has a conformance suite. Include positive execution tests, negative t
 
 ## 13. Immediate next deliverables
 
-Write a separate **Core IR specification** with exact node schemas and typing rules; a **wire protocol** with versioning and transactional edits; and a **compiler prototype** that builds an integer/struct/`Result` CLI plus one C fixture. These are the smallest artifacts that can falsify the central design assumptions before investing in a full backend standard library.
+Write a versioned **token ABI specification** with exact decoder transitions and
+typed graph construction rules; then build a constrained decoder and a compact
+whole-task evaluation harness. Graph persistence and transactions follow the
+token ABI rather than defining a second authoring syntax.
 
 Initial Phase 0 artifacts:
 
-- [Core IR v0 specification](docs/specs/core-ir-v0.md)
-- [Wire protocol v0 specification](docs/specs/wire-protocol-v0.md)
-- [LLVM lowering v0](docs/specs/llvm-lowering-v0.md)
+- [Latent ISA v0 specification](docs/specs/latent-isa-v0.md)
 - [LLM learning guide](docs/llm/learning-guide.md)
+- [Token ABI examples](examples/latent-isa.md)
+- [Core IR v0 specification](docs/specs/core-ir-v0.md) (experimental graph support)
+- [LLVM lowering v0](docs/specs/llvm-lowering-v0.md)
 - [Implementation epics](docs/planning/epics.md) (staged for publication as GitHub Issues)
 
 ## 14. Bootstrap prototype
 
-The initial verifier is a dependency-free Zig project. Its JSON wire adapter
-decodes a versioned snapshot into a typed canonical graph; graph validation
-then checks supported targets, declaration identity, entry blocks, and the
-first typed operation path (`const`, `add.wrapping`, and `return`). JSON is not a source
-language or canonical representation. The verifier intentionally does not yet
-claim general SSA, operation typing, ownership, or code generation.
+The initial executable path is a dependency-free Zig project. Its
+`lil.token/0` decoder accepts raw `u16` semantic IDs, exposes a typed legal-next
+constraint at each boundary, and constructs a typed graph directly. The first
+implemented path is `const i32 → add.wrapping i32 → return i32` in a
+parameter-free `main`. The decoder intentionally does not yet claim general
+SSA, effects, ownership, or the future semantic-operator set.
 
 Semantic diagnostics name the relevant graph object and violated rule, keeping
 model repairs targeted even though the canonical program has no textual source
@@ -206,16 +210,13 @@ location.
 
 ```sh
 zig build test
-zig build run -- check fixtures/valid/minimal-macos.json
-zig build run -- render fixtures/valid/minimal-macos.json
-zig build run -- eval fixtures/valid/minimal-macos.json
-zig build run -- encode fixtures/valid/minimal-macos.json
-zig build run -- digest fixtures/valid/minimal-macos.json
-zig build run -- propose-rename fixtures/valid/minimal-macos.json fn.main app_main
-zig build run -- lower-llvm fixtures/valid/minimal-macos.json
-zig build example-minimal
+zig build run -- legal-next-token-ids -
+zig build run -- check-token-ids 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2
+zig build run -- render-token-ids 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2
+zig build run -- eval-token-ids 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2
+zig build run -- lower-token-ids 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2
 bash scripts/test-native-vertical-slice.sh
-bash scripts/build-native.sh fixtures/valid/minimal-macos.json ./lil-example
+bash scripts/build-native.sh 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2 ./lil-example
 ```
 
 The first-class development target is Apple Silicon macOS

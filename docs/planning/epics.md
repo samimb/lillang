@@ -8,8 +8,8 @@ infrastructure; they no longer define LIL's authoring model.
 ## Epic: Latent ISA pivot — semantic token ABI and constrained decoding
 
 LIL's primary path is `semantic token IDs → constrained decoder → typed latent
-graph → backend`. Human-readable text and JSON snapshots are projections or
-transport formats, not source.
+graph → backend`. Human-readable text is a projection, not source; durable
+graph persistence is intentionally deferred until the token ABI stabilizes.
 
 **Tracked child issues:** #8 token ABI and decoder states; #9 constrained
 decoding prototype; #10 semantic operator criteria; #11 scoped model-memory

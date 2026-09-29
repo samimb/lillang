@@ -219,6 +219,267 @@ pub const DecodedSnapshot = struct {
     }
 };
 
+/// The model-facing ABI is a stream of these raw IDs.  The names below are
+/// implementation documentation only; the IDs, not their spellings, are what
+/// an ABI-compatible model emits.
+pub const token_abi_version = "lil.token/0";
+pub const TokenId = u16;
+
+pub const TokenAbi = struct {
+    pub const module_begin: TokenId = 0x0001;
+    pub const module_end: TokenId = 0x0002;
+    pub const function_main_i32: TokenId = 0x0010;
+    pub const function_end: TokenId = 0x0011;
+    pub const const_i32: TokenId = 0x0020;
+    pub const add_wrapping_i32: TokenId = 0x0021;
+    pub const return_i32: TokenId = 0x0022;
+
+    // Dense ABI ranges avoid a textual literal grammar.  This v0 slice uses
+    // signed 12-bit immediates and local value handles 0 through 4095.
+    pub const literal_i32_base: TokenId = 0x1000;
+    pub const literal_i32_count: TokenId = 0x1000;
+    pub const value_ref_base: TokenId = 0x3000;
+    pub const value_ref_count: TokenId = 0x1000;
+
+    pub fn literalI32(value: i32) error{LiteralOutOfRange}!TokenId {
+        if (value < -2048 or value > 2047) return error.LiteralOutOfRange;
+        return literal_i32_base + @as(TokenId, @intCast(value + 2048));
+    }
+
+    pub fn valueRef(index: u16) error{ValueReferenceOutOfRange}!TokenId {
+        if (index >= value_ref_count) return error.ValueReferenceOutOfRange;
+        return value_ref_base + index;
+    }
+
+    pub fn decodeLiteralI32(id: TokenId) ?i32 {
+        if (id < literal_i32_base or id >= literal_i32_base + literal_i32_count) return null;
+        return @as(i32, id - literal_i32_base) - 2048;
+    }
+
+    pub fn decodeValueRef(id: TokenId) ?u16 {
+        if (id < value_ref_base or id >= value_ref_base + value_ref_count) return null;
+        return id - value_ref_base;
+    }
+};
+
+pub const DecoderError = error{
+    UnexpectedToken,
+    InvalidLiteralToken,
+    InvalidValueReference,
+    ValueTypeMismatch,
+    ValueTableFull,
+    IncompleteProgram,
+    ProgramAlreadyFinished,
+};
+
+pub const DecoderState = enum {
+    expect_module_begin,
+    expect_function_or_module_end,
+    expect_operation,
+    expect_i32_literal,
+    expect_add_left,
+    expect_add_right,
+    expect_return_value,
+    expect_function_end,
+    complete,
+};
+
+/// A compact description of the vocabulary legal at a decoder boundary. A
+/// serving runtime can turn this into a token mask without asking the model to
+/// reason about syntax, arity, scope, or integer types.
+pub const NextTokenConstraint = union(enum) {
+    exact: []const TokenId,
+    i32_literal,
+    i32_value_ref: u16,
+    terminal,
+};
+
+const module_start_tokens = [_]TokenId{TokenAbi.module_begin};
+const function_start_tokens = [_]TokenId{TokenAbi.function_main_i32};
+const module_end_tokens = [_]TokenId{TokenAbi.module_end};
+const operation_tokens = [_]TokenId{ TokenAbi.const_i32, TokenAbi.add_wrapping_i32, TokenAbi.return_i32 };
+const function_end_tokens = [_]TokenId{TokenAbi.function_end};
+
+/// Direct decoder from a semantic token stream to a typed graph. It deliberately
+/// has no lexer or parser: every input is one ABI token and every state exposes
+/// its legal continuation before the next token is accepted.
+pub const SemanticDecoder = struct {
+    backing_allocator: std.mem.Allocator,
+    arena: ?*std.heap.ArenaAllocator,
+    target: Target,
+    state: DecoderState = .expect_module_begin,
+    operations: []Operation,
+    value_types: []ScalarType,
+    operation_count: usize = 0,
+    value_count: usize = 0,
+    function_started: bool = false,
+    function_finished: bool = false,
+    pending_left: ?ValueRef = null,
+
+    pub fn init(backing_allocator: std.mem.Allocator, target: Target, maximum_tokens: usize) !SemanticDecoder {
+        const arena = try backing_allocator.create(std.heap.ArenaAllocator);
+        arena.* = std.heap.ArenaAllocator.init(backing_allocator);
+        errdefer {
+            arena.deinit();
+            backing_allocator.destroy(arena);
+        }
+        const arena_allocator = arena.allocator();
+        return .{
+            .backing_allocator = backing_allocator,
+            .arena = arena,
+            .target = target,
+            .operations = try arena_allocator.alloc(Operation, maximum_tokens),
+            .value_types = try arena_allocator.alloc(ScalarType, maximum_tokens),
+        };
+    }
+
+    pub fn deinit(self: *SemanticDecoder) void {
+        if (self.arena) |arena| {
+            arena.deinit();
+            self.backing_allocator.destroy(arena);
+            self.arena = null;
+        }
+    }
+
+    pub fn nextConstraint(self: *const SemanticDecoder) NextTokenConstraint {
+        return switch (self.state) {
+            .expect_module_begin => .{ .exact = &module_start_tokens },
+            .expect_function_or_module_end => .{ .exact = if (self.function_finished) &module_end_tokens else &function_start_tokens },
+            .expect_operation => .{ .exact = &operation_tokens },
+            .expect_i32_literal => .i32_literal,
+            .expect_add_left, .expect_add_right, .expect_return_value => .{ .i32_value_ref = @intCast(self.value_count) },
+            .expect_function_end => .{ .exact = &function_end_tokens },
+            .complete => .terminal,
+        };
+    }
+
+    pub fn push(self: *SemanticDecoder, id: TokenId) !void {
+        switch (self.state) {
+            .expect_module_begin => {
+                if (id != TokenAbi.module_begin) return error.UnexpectedToken;
+                self.state = .expect_function_or_module_end;
+            },
+            .expect_function_or_module_end => {
+                if (id == TokenAbi.function_main_i32 and !self.function_started) {
+                    self.function_started = true;
+                    self.state = .expect_operation;
+                } else if (id == TokenAbi.module_end and self.function_finished) {
+                    self.state = .complete;
+                } else {
+                    return error.UnexpectedToken;
+                }
+            },
+            .expect_operation => switch (id) {
+                TokenAbi.const_i32 => self.state = .expect_i32_literal,
+                TokenAbi.add_wrapping_i32 => self.state = .expect_add_left,
+                TokenAbi.return_i32 => self.state = .expect_return_value,
+                else => return error.UnexpectedToken,
+            },
+            .expect_i32_literal => {
+                const value = TokenAbi.decodeLiteralI32(id) orelse return error.InvalidLiteralToken;
+                try self.appendConst(value);
+                self.state = .expect_operation;
+            },
+            .expect_add_left => {
+                self.pending_left = try self.i32ValueRef(id);
+                self.state = .expect_add_right;
+            },
+            .expect_add_right => {
+                const right = try self.i32ValueRef(id);
+                try self.appendWrappingAdd(self.pending_left.?, right);
+                self.pending_left = null;
+                self.state = .expect_operation;
+            },
+            .expect_return_value => {
+                const value = try self.i32ValueRef(id);
+                try self.appendReturn(value);
+                self.state = .expect_function_end;
+            },
+            .expect_function_end => {
+                if (id != TokenAbi.function_end) return error.UnexpectedToken;
+                self.function_finished = true;
+                self.state = .expect_function_or_module_end;
+            },
+            .complete => return error.ProgramAlreadyFinished,
+        }
+    }
+
+    pub fn finish(self: *SemanticDecoder) !DecodedSnapshot {
+        if (self.state != .complete) return error.IncompleteProgram;
+        const arena = self.arena orelse return error.ProgramAlreadyFinished;
+        const arena_allocator = arena.allocator();
+        const blocks = try arena_allocator.alloc(Block, 1);
+        blocks[0] = .{
+            .id = "latent.entry",
+            .parameters = &.{},
+            .operations = self.operations[0..self.operation_count],
+        };
+        const declarations = try arena_allocator.alloc(Declaration, 1);
+        declarations[0] = .{ .function_decl = .{
+            .id = "latent.fn.main",
+            .name = "main",
+            .visibility = .public,
+            .parameters = &.{},
+            .result = .i32,
+            .effects = &.{},
+            .body = .{ .entry = "latent.entry", .blocks = blocks },
+        } };
+        const graph = Graph{
+            .id = "latent.module",
+            .target = self.target,
+            .dependencies = &.{},
+            .declarations = declarations,
+        };
+        try validateGraph(graph, arena_allocator);
+        self.arena = null;
+        return .{ .arena = arena, .graph = graph };
+    }
+
+    fn allocator(self: *SemanticDecoder) std.mem.Allocator {
+        return self.arena.?.allocator();
+    }
+
+    fn appendConst(self: *SemanticDecoder, value: i32) !void {
+        if (self.value_count >= TokenAbi.value_ref_count) return error.ValueTableFull;
+        const id = try std.fmt.allocPrint(self.allocator(), "latent.value.{d}", .{self.value_count});
+        self.operations[self.operation_count] = .{ .const_integer = .{ .id = id, .type = .i32, .value = value } };
+        self.operation_count += 1;
+        self.value_types[self.value_count] = .i32;
+        self.value_count += 1;
+    }
+
+    fn appendWrappingAdd(self: *SemanticDecoder, left: ValueRef, right: ValueRef) !void {
+        if (self.value_count >= TokenAbi.value_ref_count) return error.ValueTableFull;
+        const id = try std.fmt.allocPrint(self.allocator(), "latent.value.{d}", .{self.value_count});
+        self.operations[self.operation_count] = .{ .wrapping_add = .{ .id = id, .type = .i32, .left = left, .right = right } };
+        self.operation_count += 1;
+        self.value_types[self.value_count] = .i32;
+        self.value_count += 1;
+    }
+
+    fn appendReturn(self: *SemanticDecoder, value: ValueRef) !void {
+        self.operations[self.operation_count] = .{ .return_value = .{ .id = "latent.return", .value = value } };
+        self.operation_count += 1;
+    }
+
+    fn i32ValueRef(self: *const SemanticDecoder, id: TokenId) !ValueRef {
+        const index = TokenAbi.decodeValueRef(id) orelse return error.InvalidValueReference;
+        if (index >= self.value_count) return error.InvalidValueReference;
+        if (self.value_types[index] != .i32) return error.ValueTypeMismatch;
+        return .{ .operation_id = self.operations[index].id(), .result_index = 0 };
+    }
+};
+
+/// Convenience entry point for clients that already have a complete model
+/// output. Incremental clients should retain `SemanticDecoder` and query its
+/// `nextConstraint` between token emissions.
+pub fn decodeTokenIds(backing_allocator: std.mem.Allocator, target: Target, token_ids: []const TokenId) !DecodedSnapshot {
+    var decoder = try SemanticDecoder.init(backing_allocator, target, token_ids.len);
+    defer decoder.deinit();
+    for (token_ids) |id| try decoder.push(id);
+    return decoder.finish();
+}
+
 /// Decodes v0 JSON into the canonical graph. JSON ends at this adapter.
 pub fn decodeJsonSnapshot(backing_allocator: std.mem.Allocator, bytes: []const u8) !DecodedSnapshot {
     const arena = try backing_allocator.create(std.heap.ArenaAllocator);
@@ -990,17 +1251,33 @@ fn renderOperation(writer: *std.Io.Writer, operation: Operation) !void {
 
 fn typeName(type_: ScalarType) []const u8 {
     return switch (type_) {
-        .unit => "unit", .boolean => "bool", .i8 => "i8", .i16 => "i16", .i32 => "i32", .i64 => "i64",
-        .u8 => "u8", .u16 => "u16", .u32 => "u32", .u64 => "u64", .f32 => "f32", .f64 => "f64",
+        .unit => "unit",
+        .boolean => "bool",
+        .i8 => "i8",
+        .i16 => "i16",
+        .i32 => "i32",
+        .i64 => "i64",
+        .u8 => "u8",
+        .u16 => "u16",
+        .u32 => "u32",
+        .u64 => "u64",
+        .f32 => "f32",
+        .f64 => "f64",
     };
 }
 
 fn representationName(repr: Representation) []const u8 {
-    return switch (repr) { .native => "native", .c => "c" };
+    return switch (repr) {
+        .native => "native",
+        .c => "c",
+    };
 }
 
 fn visibilityName(visibility: Visibility) []const u8 {
-    return switch (visibility) { .private => "private", .public => "public" };
+    return switch (visibility) {
+        .private => "private",
+        .public => "public",
+    };
 }
 
 fn integerFits(value: i64, type_: ScalarType) bool {
@@ -1284,4 +1561,64 @@ test "transaction rejects a stale base before applying edits" {
         .renames = &renames,
     }));
     try std.testing.expectEqualStrings("Original", graph.declarations[0].name());
+}
+
+test "semantic token ABI decodes directly to a typed graph" {
+    const tokens = [_]TokenId{
+        TokenAbi.module_begin,
+        TokenAbi.function_main_i32,
+        TokenAbi.const_i32,
+        try TokenAbi.literalI32(20),
+        TokenAbi.const_i32,
+        try TokenAbi.literalI32(22),
+        TokenAbi.add_wrapping_i32,
+        try TokenAbi.valueRef(0),
+        try TokenAbi.valueRef(1),
+        TokenAbi.return_i32,
+        try TokenAbi.valueRef(2),
+        TokenAbi.function_end,
+        TokenAbi.module_end,
+    };
+    var decoded = try decodeTokenIds(std.testing.allocator, .aarch64_macos, &tokens);
+    defer decoded.deinit();
+
+    try validateGraph(decoded.graph, std.testing.allocator);
+    const result = try evaluateMain(decoded.graph, std.testing.allocator);
+    try std.testing.expectEqual(IntegerValue{ .signed = 42 }, result);
+    try std.testing.expectEqualStrings("latent.value.2", decoded.graph.declarations[0].function_decl.body.blocks[0].operations[2].id());
+}
+
+test "semantic decoder exposes typed next-token constraints" {
+    var decoder = try SemanticDecoder.init(std.testing.allocator, .aarch64_macos, 16);
+    defer decoder.deinit();
+
+    switch (decoder.nextConstraint()) {
+        .exact => |ids| try std.testing.expectEqualSlices(TokenId, &.{TokenAbi.module_begin}, ids),
+        else => return error.TestUnexpectedResult,
+    }
+    try decoder.push(TokenAbi.module_begin);
+    try decoder.push(TokenAbi.function_main_i32);
+    try decoder.push(TokenAbi.const_i32);
+    switch (decoder.nextConstraint()) {
+        .i32_literal => {},
+        else => return error.TestUnexpectedResult,
+    }
+    try decoder.push(try TokenAbi.literalI32(1));
+    try decoder.push(TokenAbi.add_wrapping_i32);
+    switch (decoder.nextConstraint()) {
+        .i32_value_ref => |count| try std.testing.expectEqual(@as(u16, 1), count),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectError(error.InvalidValueReference, decoder.push(try TokenAbi.valueRef(1)));
+    try decoder.push(try TokenAbi.valueRef(0));
+}
+
+test "semantic decoder rejects tokens outside the current grammar and type state" {
+    var decoder = try SemanticDecoder.init(std.testing.allocator, .aarch64_macos, 8);
+    defer decoder.deinit();
+    try std.testing.expectError(error.UnexpectedToken, decoder.push(TokenAbi.const_i32));
+    try decoder.push(TokenAbi.module_begin);
+    try decoder.push(TokenAbi.function_main_i32);
+    try decoder.push(TokenAbi.const_i32);
+    try std.testing.expectError(error.InvalidLiteralToken, decoder.push(TokenAbi.value_ref_base));
 }

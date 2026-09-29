@@ -26,7 +26,7 @@ backend identifiers while later debug metadata can retain the source graph ID.
 The command below emits the IR for inspection or a later linker stage:
 
 ```sh
-zig build run -- lower-llvm fixtures/valid/minimal-macos.json
+zig build run -- lower-token-ids 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2
 ```
 
 The repository's native vertical-slice harness compiles this emitted IR with
@@ -40,7 +40,7 @@ For the supported host-native subset, the bootstrap build command combines
 validation, lowering, and linking:
 
 ```sh
-bash scripts/build-native.sh <snapshot.json> <output-path>
+bash scripts/build-native.sh <comma-separated-token-ids> <output-path>
 ```
 
 The v0 lowering accepts only a parameter-free, effect-free public `main` with

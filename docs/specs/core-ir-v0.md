@@ -116,7 +116,7 @@ MUST be the final operation of its block. Its `ValueRef` currently resolves
 only to an earlier operation in the same block, MUST use result index `0`, and
 MUST have the function's declared result type. Operation IDs are unique within
 a function. These same rules apply regardless of whether a graph was created
-by a model, a Zig API, JSON, or a later binary wire decoder.
+by a model token decoder, a Zig API, or a future graph persistence decoder.
 
 `WrappingAdd` has one result at index `0`. Both inputs MUST refer to earlier
 local results at index `0`, have the operation's declared integer type, and

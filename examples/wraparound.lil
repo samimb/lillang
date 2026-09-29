@@ -1,8 +1,0 @@
-module example.wraparound target aarch64-macos-none
-pub fn main() -> i8 {
-  block entry:
-    %op.max: i8 = const 127
-    %op.one: i8 = const 1
-    %op.wrapped: i8 = add.wrapping %op.max[0], %op.one[0]
-    return %op.wrapped[0]
-}

@@ -1,1 +1,0 @@
-{"protocol":"lil.wire/0","kind":"snapshot","optional_metadata":{},"body":{"id":"module.example","format_version":"lil.cpg/0","language_version":"0.1","target":"wasm32-freestanding","dependencies":[],"declarations":[]}}

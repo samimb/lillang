@@ -1,77 +1,76 @@
 # Learning LIL from the specification
 
-This guide is the entry point for an LLM, tool author, or human implementing
-LIL. It does not define new semantics. When it disagrees with a normative
-specification, the normative specification wins.
+This is the entry point for an LLM, compiler-service author, or human tooling
+author. It adds no semantics: when it disagrees with a normative document,
+[Latent ISA v0](../specs/latent-isa-v0.md) wins.
+
+## What LIL is
+
+LIL is not textual source code. A compatible model emits `u16` semantic token
+IDs. The compiler service supplies a legal-next-token constraint before each
+emission, decodes accepted IDs into a typed latent program graph, validates the
+graph, and commits the graph together with the exact token ABI version.
+
+Human renderings are inspection output only. Do not generate braces, keywords,
+variable names, JSON, or a file format as a substitute for a token stream.
 
 ## Reading order
 
-1. Read the [language overview](../../README.md) for goals, scope, and explicit
-   non-goals.
-2. Read [Core IR v0](../specs/core-ir-v0.md) for the current executable
-   language subset and validation rules.
-3. Read [Wire Protocol v0](../specs/wire-protocol-v0.md) before constructing,
-   transporting, or editing a graph.
-4. Read the fixture nearest to the intended change. Fixtures are executable
-   examples, not alternate specifications.
-5. Run `lil render <snapshot.json>` to inspect the compiler's deterministic
-   projection of a decoded graph. Treat that projection as read-only context.
-6. Use `lil digest <snapshot.json>` as an edit base only after the document has
-   been decoded and canonically re-encoded. A graph hash identifies a graph
-   revision; it is never a symbol name or a model-local handle.
-7. Treat graph edits as transactions. The current `propose-rename` command is
-   non-persistent and returns a candidate only after its base digest and graph
-   validation both succeed.
-8. Read [LLVM lowering v0](../specs/llvm-lowering-v0.md) only when changing
-   backend behavior. It specifies a projection from a validated graph, never
-   a second language syntax.
+1. Read the [language overview](../../README.md) for goals and non-goals.
+2. Read [Latent ISA v0](../specs/latent-isa-v0.md), especially §2.1 and §2.2,
+   before emitting or decoding any token.
+3. Read [the ABI examples](../../examples/latent-isa.md) for the executable
+   `lil.token/0` vector and expected constraints.
+4. Read [Core IR v0](../specs/core-ir-v0.md) only when changing the temporary
+   typed-graph/backend support layer.
+5. Read [LLVM lowering v0](../specs/llvm-lowering-v0.md) only when changing
+   the experimental backend projection.
 
-## Current implementation boundary
+## `lil.token/0` authoring protocol
 
-The bootstrap verifier decodes a `lil.wire/0` snapshot envelope into a typed
-`lil.cpg/0` graph, then validates that graph. JSON is one replaceable transport
-adapter; it is not a source language or a semantic data structure. The current
-validator checks versions, the declared target, required fields, declaration
-IDs and names, declaration shapes, scalar types, entry-block identity, and the
-v0 `UnsafeFFI` effect. It also validates the implemented `const` →
-`add.wrapping` → `return` operation path: integer range, operation identity,
-operand types, terminator position, local SSA reference, result index, and
-return type. The same subset can be evaluated by the reference interpreter.
-Semantic failures identify an error code, the smallest relevant graph object,
-and the violated rule, so repair can be scoped to a graph node instead of a
-text location.
+For the implemented subset, emit this sequence of semantic choices:
 
-It does **not** yet validate operation schemas, SSA dominance, block edges,
-effect propagation, layout, ownership, borrow lifetimes, cleanup, async, or
-native code generation. Do not infer that an accepted snapshot has those
-properties; consult the phase and rule stated in the diagnostic or spec.
+1. `1` to begin the module.
+2. `16` to begin `main() -> i32`.
+3. In the function body, choose `32` (constant), `33` (wrapping addition), or
+   `34` (return), but only when that token is in the next-token constraint.
+4. After `32`, emit an ID from `4096..8191`; it represents `id - 6144`.
+5. After `33` or `34`, emit only a permitted local-value reference from the
+   reported `12288 + n` range. Never invent a value name.
+6. After a return, emit `17`, then `2`.
 
-## Authoring rules
+For example, the vector
 
-- Treat the graph, rather than a rendered text file or JSON wire document, as
-  the source of truth.
-- Include every required field and use exact version strings.
-- Give each declaration a unique, stable `id` and a unique module-local `name`.
-- Declare the target explicitly. The initial accepted targets are Apple Silicon
-  macOS, Intel macOS, and Linux x86-64.
-- Use only the currently defined scalar types unless the Core IR version adds a
-  feature-gated extension.
-- Treat `UnsafeFFI` as an explicit boundary. It is never inferred.
-- A `const` creates result index `0`; a `return` must be the final operation
-  and must refer to an earlier local result of the function's declared type.
-- `add.wrapping` takes two earlier local results of the same integer type and
-  returns result index `0`; overflow is defined modulo that type's bit width.
-- Prefer a minimal valid graph construction or fixture before proposing a new
-  graph construct.
+```text
+1 16 32 6164 32 6166 33 12288 12289 34 12290 17 2
+```
 
-## How to extend the language
+constructs a graph whose `main` returns `42`. The model needs no syntax,
+temporary variable names, braces, or manually repeated type annotations.
 
-Every new semantic feature should add, in the same change:
+## Service rules
 
-1. A normative rule in the Core IR specification.
-2. Its serialized form and versioning behavior in the wire protocol.
-3. A valid fixture, an invalid fixture, and verifier tests.
-4. A concise update to this guide’s implementation boundary.
+- Request the next-token constraint before every token. A constraint is
+  authoritative for that exact graph/projection state.
+- Treat model-local references as positional handles, not saved names.
+- Commit only a fully decoded graph with its ABI version and base graph digest.
+- If a token is rejected, retain the prior graph state and request the new
+  constraint; do not repair a textual representation.
+- Ask the service for scoped symbol/type projections when an operation needs
+  a repository definition. Account for that retrieval as part of task cost.
+- Use a disassembly only for review, diagnostics, or context. It cannot be
+  parsed back into a program.
 
-This keeps the language learnable: an LLM can retrieve one small rule plus
-positive and negative examples instead of guessing from compiler behavior.
+## Extending the language
+
+Every token-ABI extension must include:
+
+1. Stable numeric IDs or a stable numeric range.
+2. Exact decoder transitions and legal-next constraints.
+3. Result types, effects, failure, cancellation, and lowering semantics.
+4. Direct-decoder positive and negative tests.
+5. Whole-task evidence that the operation reduces model information cost
+   without hiding a material behavior choice.
+
+This keeps LIL learnable: the model retrieves a compact ABI rule and receives
+only legal next choices instead of guessing a textual grammar.
