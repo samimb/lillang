@@ -214,6 +214,7 @@ zig build run -- digest fixtures/valid/minimal-macos.json
 zig build run -- propose-rename fixtures/valid/minimal-macos.json fn.main app_main
 zig build run -- lower-llvm fixtures/valid/minimal-macos.json
 zig build example-minimal
+bash scripts/test-native-vertical-slice.sh
 ```
 
 The first-class development target is Apple Silicon macOS

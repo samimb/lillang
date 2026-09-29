@@ -26,6 +26,13 @@ The command below emits the IR for inspection or a later linker stage:
 zig build run -- lower-llvm fixtures/valid/minimal-macos.json
 ```
 
+The repository's native vertical-slice harness compiles this emitted IR with
+Zig's LLVM-backed toolchain and verifies that the native process returns `42`:
+
+```sh
+bash scripts/test-native-vertical-slice.sh
+```
+
 The v0 lowering accepts only a parameter-free, effect-free public `main` with
 an `i32` result. Branches, calls, structs, `Result`, ownership, optimization,
 debug metadata, object emission, and linking remain outside this implemented
