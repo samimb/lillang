@@ -1,13 +1,13 @@
-// LIL semantic disassembly — illustrative, not yet an executable token ABI vector.
-// The committed program is a typed graph; local handles and this rendering are projections.
+// LIL debugger projection — illustrative operator graph, not source.
+// Exact raw token IDs await an admitted HTTP/serde/propagate ABI extension.
 
-function (%0: Url) -> Result<User, FetchError> ![Net] {
-  %1: Result<Response, HttpError> = http.get %0
-  %2: Response = propagate %1 as FetchError
-  %3: Result<User, DecodeError> = json.decode<User> %2
-  return propagate %3 as FetchError
-}
+// Compact graph traversal mnemonic:
+F[1,U,R<U,E>](?D<U>(HGET[0]))
 
-// `propagate` represents the required Result branch and error conversion.
-// It does not hide an effect, error mapping, or cancellation behavior: those
-// are declared by the operator definition in the token ABI.
+// Expanded debugger view:
+function (arg0: Url) -> Result<User, FetchError> ![Net]
+  propagate json.decode<User>(http.get(arg0))
+
+// The graph carries the HTTP effect, decoder failure, and explicit conversion
+// to FetchError. `propagate` inserts the Result control edge; no temporary
+// variable or textual error branch is part of the model output.

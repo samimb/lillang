@@ -20,7 +20,11 @@ Using LIL, build an i64 function that adds its two arguments. Only give code out
 
 Those seven `u16` IDs are the program. `1847` is the ABI token for an anonymous
 two-input function frame; the three `3912`s fill its input/result type slots;
-`8122 7201 7202` creates `add<i64>(arg0,arg1)`.
+`8122 7201 7202` creates `add.wrapping<i64>(arg0,arg1)`.
+
+**Comparison contract:** inputs satisfy `INT64_MIN ≤ arg0 + arg1 ≤ INT64_MAX`.
+Within that domain, LIL’s wrapping add and C’s signed add have the same result.
+Overflow policy is intentionally excluded from this first pipeline test.
 
 ### 3. Debugger view
 
@@ -46,8 +50,8 @@ bash scripts/build-function-graph-v1-demo.sh \
 ./lil-add
 ```
 
-The wrapper that calls `lil_entry(20, 22)` is compiler/build configuration. It
-is not model output and does not change the latent function graph.
+The wrapper is compiler/build configuration. It calls the same `i64(i64,i64)`
+function boundary over a small no-overflow input table; it is not model output.
 
 ## C
 
@@ -65,24 +69,24 @@ Using C, build an i64 function that adds its two arguments. Only give code outpu
 int64_t add_i64(int64_t arg0, int64_t arg1) {
     return arg0 + arg1;
 }
-
-int main(void) {
-    return add_i64(20, 22) == 42 ? 0 : 1;
-}
 ```
 
 ### 3. Build an executable
 
 ```sh
-gcc -O3 -std=c11 add_i64.c -o c-add
+gcc -O3 -std=c11 -c add_i64.c -o add_i64.o
+gcc -O3 -std=c11 add_i64.o external_harness.c -o c-add
 ./c-add
 ```
+
+`external_harness.c` contains the same input table and no-overflow contract as
+the LIL build wrapper. It is deliberately outside the generated C function.
 
 ## Performance
 
 | Metric | LIL | C | Status |
 | --- | ---: | ---: | --- |
-| Correctness harness | exit 0 expected | exit 0 expected | runnable |
+| Correctness harness | same external input table | same external input table | runnable |
 | Native runtime | not measured | not measured | requires fixed benchmark harness and target |
 | Native binary size | not measured | not measured | requires identical linker/debug settings |
 | Compile time | not measured | not measured | requires repeated cold/warm runs |
@@ -94,9 +98,11 @@ the same target with published commands and compiler versions.
 
 | Representation | Model output required | Count | Status |
 | --- | --- | ---: | --- |
-| LIL `lil.graph/1` | `1847 3912 3912 3912 8122 7201 7202` | 7 semantic tokens | exact ABI count |
+| LIL `lil.graph/1` | `1847 3912 3912 3912 8122 7201 7202` | 7 semantic IDs | exact ABI count, not yet a model-token measurement |
 | C | C source above | not measured | requires one named model/tokenizer and an actual generation trace |
 
-Comparing LIL’s seven semantic tokens to an invented C-token count would be
-misleading. The evaluation harness records tokenizer/model identity so a real
-comparison can be reproduced.
+The sequence is seven generated model tokens only if the selected model’s
+vocabulary maps each LIL ID to exactly one output token and the inference trace
+records those output IDs. Decimal text in a chat response is not that trace.
+The evaluation harness records tokenizer/model identity so a real comparison
+can be reproduced.

@@ -1,13 +1,13 @@
-// LIL semantic disassembly — illustrative, not source.
+// LIL debugger projection — illustrative operator graph, not source.
+// Exact raw token IDs await admitted retry/timeout ABI definitions.
 
-function (%0: Url) -> Result<Response, FetchError> ![Net, Clock] {
-  %1: Result<Response, FetchError> = retry {
-    attempts = 3
-    backoff = exponential(initial = 100ms, maximum = 1s)
-    only = transient(FetchError)
-  } (timeout 5s (http.get %0))
-  return %1
-}
+// Compact graph traversal mnemonic:
+F[1,U,R<R,E>](R[3](T[5s](HGET[0])))
 
-// Admission to the ABI requires retry and timeout to declare their effect,
-// failure, cancellation, scheduling, and backend-lowering semantics.
+// Expanded debugger view:
+function (arg0: Url) -> Result<Response, FetchError> ![Net, Clock]
+  retry(attempts: 3, backoff: exponential(100ms, 1s))
+    timeout(5s, http.get(arg0))
+
+// Retry, timeout, cancellation, idempotency, backoff, and failure conversion
+// are typed operator fields in the graph. They are not inferred from layout.
