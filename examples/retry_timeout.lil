@@ -1,0 +1,13 @@
+// LIL semantic disassembly — illustrative, not source.
+
+pub fn fetch_with_budget(%0: Url) -> Result<Response, FetchError> ![Net, Clock] {
+  %1: Result<Response, FetchError> = retry {
+    attempts = 3
+    backoff = exponential(initial = 100ms, maximum = 1s)
+    only = transient(FetchError)
+  } (timeout 5s (http.get %0))
+  return %1
+}
+
+// Admission to the ABI requires retry and timeout to declare their effect,
+// failure, cancellation, scheduling, and backend-lowering semantics.

@@ -1,0 +1,13 @@
+// LIL semantic disassembly — illustrative, not source.
+
+pub fn load_profile(%0: UserId) -> Result<Profile, LoadError> ![Net, DB.Read] {
+  (%1, %2) = parallel.join {
+    http.fetch_avatar %0
+    db.fetch_preferences %0
+  }
+  return propagate profile.combine %1, %2
+}
+
+// `parallel.join` is legal only if both child effects, order, cancellation,
+// and failure behavior satisfy its operator contract. It is never inferred
+// merely from two independent-looking graph branches.

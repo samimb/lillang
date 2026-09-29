@@ -191,6 +191,7 @@ Initial Phase 0 artifacts:
 - [Latent ISA v0 specification](docs/specs/latent-isa-v0.md)
 - [LLM learning guide](docs/llm/learning-guide.md)
 - [Token ABI examples](examples/latent-isa.md)
+- [Semantic operator admission v0](docs/specs/semantic-operators-v0.md)
 - [Core IR v0 specification](docs/specs/core-ir-v0.md) (experimental graph support)
 - [LLVM lowering v0](docs/specs/llvm-lowering-v0.md)
 - [Implementation epics](docs/planning/epics.md) (staged for publication as GitHub Issues)

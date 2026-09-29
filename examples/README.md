@@ -9,6 +9,15 @@ semantic shapes it is intended to grow into. The current `lil` command accepts
 the vector only to inspect the implementation; comma separation is a CLI
 convenience, not language syntax.
 
+The `.lil` files are curated disassemblies for review, documentation, and LLM
+context. They are deliberately not parsed or round-tripped. They show the
+semantic shape that a token ABI must eventually encode:
+
+- [`arithmetic.lil`](arithmetic.lil) — implemented `lil.token/0` arithmetic.
+- [`fetch_user.lil`](fetch_user.lil) — result propagation and HTTP/serde effects.
+- [`retry_timeout.lil`](retry_timeout.lil) — retry and timeout policy.
+- [`parallel_lookup.lil`](parallel_lookup.lil) — structured parallel composition.
+
 ```sh
 # module → main() -> i32 → const 20 → const 22 → add → return → close
 zig build run -- eval-token-ids 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2

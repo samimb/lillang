@@ -1,0 +1,13 @@
+// LIL semantic disassembly — illustrative, not yet an executable token ABI vector.
+// The committed program is a typed graph; local handles and this rendering are projections.
+
+pub fn fetch_user(%0: Url) -> Result<User, FetchError> ![Net] {
+  %1: Result<Response, HttpError> = http.get %0
+  %2: Response = propagate %1 as FetchError
+  %3: Result<User, DecodeError> = json.decode<User> %2
+  return propagate %3 as FetchError
+}
+
+// `propagate` represents the required Result branch and error conversion.
+// It does not hide an effect, error mapping, or cancellation behavior: those
+// are declared by the operator definition in the token ABI.

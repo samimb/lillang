@@ -219,6 +219,22 @@ pub const DecodedSnapshot = struct {
     }
 };
 
+/// A decoded model program keeps the graph with the ABI identity that gave its
+/// raw token IDs meaning. Persistence can store this pair without retaining a
+/// human rendering or tokenizer-dependent textual spelling.
+pub const DecodedTokenProgram = struct {
+    arena: *std.heap.ArenaAllocator,
+    graph: Graph,
+    abi_version: []const u8,
+    token_count: usize,
+
+    pub fn deinit(self: *DecodedTokenProgram) void {
+        const backing_allocator = self.arena.child_allocator;
+        self.arena.deinit();
+        backing_allocator.destroy(self.arena);
+    }
+};
+
 /// The model-facing ABI is a stream of these raw IDs.  The names below are
 /// implementation documentation only; the IDs, not their spellings, are what
 /// an ABI-compatible model emits.
@@ -473,11 +489,64 @@ pub const SemanticDecoder = struct {
 /// Convenience entry point for clients that already have a complete model
 /// output. Incremental clients should retain `SemanticDecoder` and query its
 /// `nextConstraint` between token emissions.
-pub fn decodeTokenIds(backing_allocator: std.mem.Allocator, target: Target, token_ids: []const TokenId) !DecodedSnapshot {
+pub fn decodeTokenIds(backing_allocator: std.mem.Allocator, target: Target, token_ids: []const TokenId) !DecodedTokenProgram {
     var decoder = try SemanticDecoder.init(backing_allocator, target, token_ids.len);
     defer decoder.deinit();
     for (token_ids) |id| try decoder.push(id);
-    return decoder.finish();
+    const snapshot = try decoder.finish();
+    return .{
+        .arena = snapshot.arena,
+        .graph = snapshot.graph,
+        .abi_version = token_abi_version,
+        .token_count = token_ids.len,
+    };
+}
+
+/// Structured feedback for a rejected model emission. The constraint is the
+/// one that was in force before `received` was considered, so a caller can
+/// immediately mask its vocabulary and retry without reconstructing state.
+pub const DecoderDiagnostic = struct {
+    token_offset: usize,
+    received: ?TokenId,
+    state: DecoderState,
+    expected: NextTokenConstraint,
+    target: Target,
+    failure: anyerror,
+};
+
+pub fn diagnoseTokenIds(
+    backing_allocator: std.mem.Allocator,
+    target: Target,
+    token_ids: []const TokenId,
+) !?DecoderDiagnostic {
+    var decoder = try SemanticDecoder.init(backing_allocator, target, token_ids.len);
+    defer decoder.deinit();
+    for (token_ids, 0..) |id, index| {
+        const expected = decoder.nextConstraint();
+        decoder.push(id) catch |err| {
+            return .{
+                .token_offset = index,
+                .received = id,
+                .state = decoder.state,
+                .expected = expected,
+                .target = target,
+                .failure = err,
+            };
+        };
+    }
+    const expected = decoder.nextConstraint();
+    var decoded = decoder.finish() catch |err| {
+        return .{
+            .token_offset = token_ids.len,
+            .received = null,
+            .state = decoder.state,
+            .expected = expected,
+            .target = target,
+            .failure = err,
+        };
+    };
+    decoded.deinit();
+    return null;
 }
 
 /// Decodes v0 JSON into the canonical graph. JSON ends at this adapter.
@@ -1582,6 +1651,8 @@ test "semantic token ABI decodes directly to a typed graph" {
     var decoded = try decodeTokenIds(std.testing.allocator, .aarch64_macos, &tokens);
     defer decoded.deinit();
 
+    try std.testing.expectEqualStrings(token_abi_version, decoded.abi_version);
+    try std.testing.expectEqual(tokens.len, decoded.token_count);
     try validateGraph(decoded.graph, std.testing.allocator);
     const result = try evaluateMain(decoded.graph, std.testing.allocator);
     try std.testing.expectEqual(IntegerValue{ .signed = 42 }, result);
@@ -1621,4 +1692,18 @@ test "semantic decoder rejects tokens outside the current grammar and type state
     try decoder.push(TokenAbi.function_main_i32);
     try decoder.push(TokenAbi.const_i32);
     try std.testing.expectError(error.InvalidLiteralToken, decoder.push(TokenAbi.value_ref_base));
+}
+
+test "token diagnostics preserve decoder state and target before rejection" {
+    const tokens = [_]TokenId{ TokenAbi.module_begin, TokenAbi.function_main_i32, TokenAbi.const_i32, TokenAbi.value_ref_base };
+    const decoder_diagnostic = (try diagnoseTokenIds(std.testing.allocator, .aarch64_macos, &tokens)).?;
+    try std.testing.expectEqual(@as(usize, 3), decoder_diagnostic.token_offset);
+    try std.testing.expectEqual(TokenAbi.value_ref_base, decoder_diagnostic.received.?);
+    try std.testing.expectEqual(DecoderState.expect_i32_literal, decoder_diagnostic.state);
+    try std.testing.expectEqual(Target.aarch64_macos, decoder_diagnostic.target);
+    switch (decoder_diagnostic.expected) {
+        .i32_literal => {},
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(error.InvalidLiteralToken, decoder_diagnostic.failure);
 }

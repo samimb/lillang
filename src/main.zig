@@ -17,7 +17,21 @@ pub fn main(init: std.process.Init) !void {
     }
 
     var program = lil.decodeTokenIds(allocator, .aarch64_macos, token_ids) catch |err| {
-        std.debug.print("token ABI rejected stream: {t}\n", .{err});
+        if (try lil.diagnoseTokenIds(allocator, .aarch64_macos, token_ids)) |diagnostic| {
+            if (diagnostic.received) |received| {
+                std.debug.print(
+                    "token ABI rejected at offset {d}: received {d}, state {t}, expected {t}, target {s}: {t}\n",
+                    .{ diagnostic.token_offset, received, diagnostic.state, std.meta.activeTag(diagnostic.expected), diagnostic.target.wireName(), diagnostic.failure },
+                );
+            } else {
+                std.debug.print(
+                    "token ABI rejected at end of stream: state {t}, expected {t}, target {s}: {t}\n",
+                    .{ diagnostic.state, std.meta.activeTag(diagnostic.expected), diagnostic.target.wireName(), diagnostic.failure },
+                );
+            }
+        } else {
+            std.debug.print("token ABI rejected stream: {t}\n", .{err});
+        }
         return err;
     };
     defer program.deinit();

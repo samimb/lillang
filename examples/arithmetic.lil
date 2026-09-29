@@ -1,0 +1,12 @@
+// LIL disassembly example — human-readable inspection only.
+// This file is not parsed, compiled, or round-tripped as source.
+// Executable lil.token/0 vector: 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2
+
+module latent.module target aarch64-macos-none
+
+pub fn main() -> i32 {
+  %0: i32 = const 20
+  %1: i32 = const 22
+  %2: i32 = add.wrapping %0, %1
+  return %2
+}

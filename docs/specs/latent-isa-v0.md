@@ -104,6 +104,9 @@ metrics. Each operator MUST have precise effect, failure, cancellation, and
 lowering semantics. An operator is admitted when it reduces whole-task model
 information cost without hiding a material behavior choice.
 
+The normative admission policy and first candidate set are in
+[Semantic operator admission v0](semantic-operators-v0.md).
+
 ## 5. Model memory and edits
 
 The compiler service is part of the authoring architecture. It provides scoped
