@@ -35,7 +35,7 @@ pub fn build(b: *std.Build) void {
     const minimal_example = b.addExecutable(.{
         .name = "lil-minimal-graph",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/minimal_graph.zig"),
+            .root_source_file = b.path("tools/minimal_graph.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{.{ .name = "lil", .module = lil }},

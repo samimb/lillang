@@ -1,0 +1,8 @@
+module example.arithmetic target aarch64-macos-none
+pub fn main() -> i32 {
+  block entry:
+    %op.left: i32 = const 20
+    %op.right: i32 = const 22
+    %op.answer: i32 = add.wrapping %op.left[0], %op.right[0]
+    return %op.answer[0]
+}

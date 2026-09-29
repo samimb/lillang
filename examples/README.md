@@ -1,28 +1,19 @@
-# Examples
+# LIL examples
 
-Examples construct or manipulate the canonical program graph. They are not
-surface-language samples and do not require a model to emit JSON.
+Each example has two views of the same program:
 
-## Minimal graph
+- `*.json` is the current canonical graph wire snapshot, consumed by the verifier, interpreter, and bootstrap compiler.
+- `*.lil` is the deterministic human/LLM projection of that graph. It is the readable LIL code view, not an independent editable source format.
 
-[`minimal_graph.zig`](minimal_graph.zig) constructs a module containing a
-public `main` declaration, one entry block, two `i32` constants, a wrapping
-addition, and a typed return. It then passes the canonical `Graph` to the
-semantic validator.
-
-Run it with:
+| Example | Demonstrates |
+| --- | --- |
+| [`arithmetic.lil`](arithmetic.lil) | typed constants, wrapping addition, and a return value |
+| [`wraparound.lil`](wraparound.lil) | explicit `i8` modular overflow semantics |
 
 ```sh
-zig build example-minimal
+zig build run -- render examples/arithmetic.json
+zig build run -- check examples/arithmetic.json
+zig build run -- eval examples/arithmetic.json
 ```
 
-The same graph can be evaluated through the wire adapter without treating JSON
-as source:
-
-```sh
-zig build run -- eval fixtures/valid/minimal-macos.json
-```
-
-The `fixtures/` directory is separate: it contains JSON documents solely to
-exercise the current wire decoder. The decoder produces the same `Graph` type
-used by this example before validation occurs.
+The Zig graph-construction sample is intentionally kept in [`tools/minimal_graph.zig`](../tools/minimal_graph.zig), outside the LIL showcase.
