@@ -15,10 +15,10 @@ pub fn main(init: std.process.Init) !void {
         return err;
     };
     defer snapshot.deinit();
-    lil.validateGraph(snapshot.graph, allocator) catch |err| {
-        std.debug.print("invalid canonical graph: {t}\n", .{err});
-        return err;
-    };
+    if (try lil.diagnoseGraph(snapshot.graph, allocator)) |diagnostic| {
+        std.debug.print("invalid canonical graph: {t} at {s}: {s}\n", .{ diagnostic.code, diagnostic.object_id, diagnostic.rule });
+        return diagnostic.code;
+    }
     if (std.mem.eql(u8, args[1], "check")) {
         std.debug.print("valid LIL Core IR v0 snapshot\n", .{});
     } else if (std.mem.eql(u8, args[1], "render")) {

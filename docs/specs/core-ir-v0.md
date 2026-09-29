@@ -162,7 +162,10 @@ A module is valid only when all of the following hold:
 6. Every control-flow edge supplies exactly the target block parameters with identical types.
 7. No `native` struct, `result`, or non-ABI-safe pointer is passed to `external.call`.
 
-The verifier reports the failing object ID, the violated rule, the observed type or edge, and the expected type or edge. A graph is rejected as a whole; there is no partially valid committed revision.
+The verifier reports a stable error code, the smallest relevant graph object ID,
+and the violated rule. The implemented subset does not yet attach observed and
+expected values; those are required when richer type and CFG diagnostics land.
+A graph is rejected as a whole; there is no partially valid committed revision.
 
 ## 7. Deferred semantics
 

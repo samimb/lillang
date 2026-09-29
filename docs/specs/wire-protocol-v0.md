@@ -88,3 +88,7 @@ Error {
 The initial service methods are `describe`, `propose`, `commit`, `render`, `build`, and `test`. `propose` executes the same validation as `commit` but produces no snapshot. `render` accepts a snapshot digest and scope; it never renders uncommitted graph state as canonical source. `build` and `test` accept a snapshot digest, ensuring diagnostics and artifacts identify the exact program revision.
 
 Authentication, authorization, repository storage, remote collaboration, and streaming model projections are outside wire protocol v0. They must not alter graph semantics or transaction atomicity when added.
+
+The current verifier exposes the `code`, `object_id`, and `rule` components for
+graph validation. Transaction-specific codes and expected/observed payloads
+remain future protocol work.

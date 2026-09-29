@@ -31,6 +31,9 @@ v0 `UnsafeFFI` effect. It also validates the implemented `const` →
 `add.wrapping` → `return` operation path: integer range, operation identity,
 operand types, terminator position, local SSA reference, result index, and
 return type. The same subset can be evaluated by the reference interpreter.
+Semantic failures identify an error code, the smallest relevant graph object,
+and the violated rule, so repair can be scoped to a graph node instead of a
+text location.
 
 It does **not** yet validate operation schemas, SSA dominance, block edges,
 effect propagation, layout, ownership, borrow lifetimes, cleanup, async, or

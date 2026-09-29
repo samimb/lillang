@@ -25,6 +25,12 @@ pub const ValidationError = error{
     InvalidEntryFunction,
 };
 
+pub const Diagnostic = struct {
+    code: ValidationError,
+    object_id: []const u8,
+    rule: []const u8,
+};
+
 /// The canonical program representation. It is independent of JSON, rendering
 /// syntax, model handles, and storage format.
 pub const Graph = struct {
@@ -618,72 +624,86 @@ fn writeValueRef(writer: *std.Io.Writer, value: ValueRef) !void {
 /// Validates canonical graph semantics. Future CBOR or binary decoders call
 /// this same function and therefore share precisely the same semantic rules.
 pub fn validateGraph(graph: Graph, allocator: std.mem.Allocator) !void {
+    if (try diagnoseGraph(graph, allocator)) |result| return result.code;
+}
+
+/// Returns the first deterministic semantic diagnostic, including the smallest
+/// graph object known to violate a rule. Allocation failures still use Zig
+/// errors; semantic invalidity is represented by a Diagnostic.
+pub fn diagnoseGraph(graph: Graph, allocator: std.mem.Allocator) !?Diagnostic {
     var ids = std.StringHashMap(void).init(allocator);
     defer ids.deinit();
     var names = std.StringHashMap(void).init(allocator);
     defer names.deinit();
 
     for (graph.declarations) |declaration| {
-        if (ids.contains(declaration.id())) return error.DuplicateDeclarationId;
-        if (names.contains(declaration.name())) return error.DuplicateDeclarationName;
+        if (ids.contains(declaration.id())) return diagnostic(error.DuplicateDeclarationId, declaration.id(), "declaration IDs are unique within a module");
+        if (names.contains(declaration.name())) return diagnostic(error.DuplicateDeclarationName, declaration.id(), "declaration names are unique within a module");
         try ids.put(declaration.id(), {});
         try names.put(declaration.name(), {});
         switch (declaration) {
-            .function_decl => |function| try validateFunction(function, allocator),
+            .function_decl => |function| if (try diagnoseFunction(function, allocator)) |result| return result,
             else => {},
         }
     }
+    return null;
 }
 
-fn validateFunction(function: FunctionDeclaration, allocator: std.mem.Allocator) !void {
+fn diagnoseFunction(function: FunctionDeclaration, allocator: std.mem.Allocator) !?Diagnostic {
     var block_ids = std.StringHashMap(void).init(allocator);
     defer block_ids.deinit();
     var operation_ids = std.StringHashMap(void).init(allocator);
     defer operation_ids.deinit();
     for (function.body.blocks) |block| {
-        if (block_ids.contains(block.id)) return error.DuplicateBlockId;
+        if (block_ids.contains(block.id)) return diagnostic(error.DuplicateBlockId, block.id, "block IDs are unique within a function");
         try block_ids.put(block.id, {});
-        try validateBlock(block, function.result, &operation_ids, allocator);
+        if (try diagnoseBlock(block, function.result, &operation_ids, allocator)) |result| return result;
     }
-    if (!block_ids.contains(function.body.entry)) return error.MissingEntryBlock;
+    if (!block_ids.contains(function.body.entry)) return diagnostic(error.MissingEntryBlock, function.id, "function entry names one of its blocks");
+    return null;
 }
 
-fn validateBlock(
+fn diagnoseBlock(
     block: Block,
     function_result: ScalarType,
     operation_ids: *std.StringHashMap(void),
     allocator: std.mem.Allocator,
-) !void {
-    if (block.operations.len == 0) return error.MissingTerminator;
+) !?Diagnostic {
+    if (block.operations.len == 0) return diagnostic(error.MissingTerminator, block.id, "every block ends in a terminator");
 
     var values = std.StringHashMap(ScalarType).init(allocator);
     defer values.deinit();
 
     for (block.operations, 0..) |operation, index| {
-        if (operation_ids.contains(operation.id())) return error.DuplicateOperationId;
+        if (operation_ids.contains(operation.id())) return diagnostic(error.DuplicateOperationId, operation.id(), "operation IDs are unique within a function");
         try operation_ids.put(operation.id(), {});
 
-        if (operation.isTerminator() and index + 1 != block.operations.len) return error.UnexpectedTerminator;
-        if (!operation.isTerminator() and index + 1 == block.operations.len) return error.MissingTerminator;
+        if (operation.isTerminator() and index + 1 != block.operations.len) return diagnostic(error.UnexpectedTerminator, operation.id(), "no operation follows a terminator");
+        if (!operation.isTerminator() and index + 1 == block.operations.len) return diagnostic(error.MissingTerminator, operation.id(), "every block ends in a terminator");
 
         switch (operation) {
             .const_integer => |constant| {
-                if (!integerFits(constant.value, constant.type)) return error.ConstantOutOfRange;
+                if (!integerFits(constant.value, constant.type)) return diagnostic(error.ConstantOutOfRange, constant.id, "integer constants fit their declared type");
                 try values.put(constant.id, constant.type);
             },
             .wrapping_add => |add| {
-                if (!isInteger(add.type)) return error.NonIntegerOperation;
-                const left_type = try resolveLocalValue(&values, add.left);
-                const right_type = try resolveLocalValue(&values, add.right);
-                if (left_type != add.type or right_type != add.type) return error.BinaryOperandTypeMismatch;
+                if (!isInteger(add.type)) return diagnostic(error.NonIntegerOperation, add.id, "wrapping addition has an integer type");
+                const left_type = resolveLocalValue(&values, add.left) catch |err| return diagnostic(err, add.id, "an operand refers to an earlier local result at index zero");
+                const right_type = resolveLocalValue(&values, add.right) catch |err| return diagnostic(err, add.id, "an operand refers to an earlier local result at index zero");
+                if (left_type != add.type or right_type != add.type) return diagnostic(error.BinaryOperandTypeMismatch, add.id, "wrapping-add operands have the declared operation type");
                 try values.put(add.id, add.type);
             },
             .return_value => |return_value| {
-                const value_type = try resolveLocalValue(&values, return_value.value);
-                if (value_type != function_result) return error.ReturnTypeMismatch;
+                const value_type = resolveLocalValue(&values, return_value.value) catch |err| return diagnostic(err, return_value.id, "a return refers to an earlier local result at index zero");
+                if (value_type != function_result) return diagnostic(error.ReturnTypeMismatch, return_value.id, "a return value has the function result type");
             },
         }
     }
+    return null;
+}
+
+fn diagnostic(code: ValidationError, object_id: []const u8, rule: []const u8) Diagnostic {
+    return .{ .code = code, .object_id = object_id, .rule = rule };
 }
 
 fn resolveLocalValue(values: *const std.StringHashMap(ScalarType), reference: ValueRef) ValidationError!ScalarType {
