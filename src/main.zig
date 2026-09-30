@@ -4,6 +4,31 @@ const lil = @import("lil");
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
+    if (args.len == 5 and std.mem.eql(u8, args[1], "pack") and std.mem.eql(u8, args[3], "-o")) {
+        const token_ids = try parseTokenIds(allocator, args[2]);
+        defer allocator.free(token_ids);
+        const bytes = try lil.encodeFunctionGraphV1File(allocator, token_ids);
+        defer allocator.free(bytes);
+        return std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[4], .data = bytes });
+    }
+    if (args.len == 3 and std.mem.eql(u8, args[1], "debug")) {
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, args[2], allocator, .limited(16 * 1024 * 1024));
+        defer allocator.free(bytes);
+        var program = try lil.decodeFunctionGraphV1File(allocator, bytes, .aarch64_macos);
+        defer program.deinit();
+        const rendered = try lil.renderGraph(allocator, program.graph);
+        defer allocator.free(rendered);
+        return writeStdout(init, rendered);
+    }
+    if (args.len == 5 and std.mem.eql(u8, args[1], "build") and std.mem.eql(u8, args[3], "-o")) {
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, args[2], allocator, .limited(16 * 1024 * 1024));
+        defer allocator.free(bytes);
+        var program = try lil.decodeFunctionGraphV1File(allocator, bytes, .aarch64_macos);
+        defer program.deinit();
+        const llvm_ir = try lil.lowerFunctionGraphV1ToLlvm(allocator, program.graph);
+        defer allocator.free(llvm_ir);
+        return linkFunctionGraph(init, allocator, llvm_ir, args[4]);
+    }
     if (args.len != 3) return usage();
 
     const token_ids = try parseTokenIds(allocator, args[2]);
@@ -116,9 +141,29 @@ fn writeStdout(init: std.process.Init, bytes: []const u8) !void {
     try stdout.interface.flush();
 }
 
+fn linkFunctionGraph(init: std.process.Init, allocator: std.mem.Allocator, llvm_ir: []const u8, output_path: []const u8) !void {
+    const ll_path = try std.fmt.allocPrint(allocator, "{s}.lil-tmp.ll", .{output_path});
+    const c_path = try std.fmt.allocPrint(allocator, "{s}.lil-tmp.c", .{output_path});
+    defer {
+        std.Io.Dir.cwd().deleteFile(init.io, ll_path) catch {};
+        std.Io.Dir.cwd().deleteFile(init.io, c_path) catch {};
+    }
+    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = ll_path, .data = llvm_ir });
+    const wrapper = "#include <stdint.h>\nextern int64_t lil_entry(int64_t, int64_t);\nint main(void) { return lil_entry(20, 22) == 42 ? 0 : 1; }\n";
+    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = c_path, .data = wrapper });
+    const emit = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{output_path});
+    const result = try std.process.run(allocator, init.io, .{ .argv = &.{ "zig", "build-exe", "-lc", ll_path, c_path, emit }, .stderr_limit = .limited(64 * 1024) });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    if (result.term != .exited or result.term.exited != 0) {
+        std.debug.print("link failed: {s}\n", .{result.stderr});
+        return error.LinkFailed;
+    }
+}
+
 fn usage() error{InvalidArguments} {
     std.debug.print(
-        "usage: lil <lower-function-graph-v1|check-token-ids|render-token-ids|eval-token-ids|lower-token-ids|legal-next-token-ids> <comma-separated-u16-ids|->\n",
+        "usage: lil pack <comma-separated-u16-ids> -o <file.lil>\n       lil debug <file.lil>\n       lil build <file.lil> -o <executable>\n       lil <lower-function-graph-v1|check-token-ids|render-token-ids|eval-token-ids|lower-token-ids|legal-next-token-ids> <comma-separated-u16-ids|->\n",
         .{},
     );
     return error.InvalidArguments;

@@ -516,6 +516,34 @@ pub const FunctionGraphTokenAbi = struct {
 
 pub const FunctionGraphDecodeError = error{ UnexpectedToken, IncompleteFunctionGraph };
 
+/// Opaque on-disk LIL artifact for `lil.graph/1`: magic, ABI revision, token
+/// count, then raw little-endian u16 token IDs. It is deliberately not UTF-8
+/// source and carries no debugger text.
+pub const lil_file_magic = "LIL\x01";
+pub const LilFileError = error{ InvalidLilFile, UnsupportedLilFileVersion, TruncatedLilFile };
+
+pub fn encodeFunctionGraphV1File(allocator: std.mem.Allocator, token_ids: []const TokenId) ![]u8 {
+    var validated = try decodeFunctionGraphV1(allocator, .aarch64_macos, token_ids);
+    defer validated.deinit();
+    const bytes = try allocator.alloc(u8, 8 + token_ids.len * 2);
+    @memcpy(bytes[0..4], lil_file_magic);
+    std.mem.writeInt(u32, bytes[4..8], @intCast(token_ids.len), .little);
+    for (token_ids, 0..) |id, index| std.mem.writeInt(u16, bytes[8 + index * 2 ..][0..2], id, .little);
+    return bytes;
+}
+
+pub fn decodeFunctionGraphV1File(allocator: std.mem.Allocator, bytes: []const u8, target: Target) !DecodedTokenProgram {
+    if (bytes.len < 8) return error.TruncatedLilFile;
+    if (!std.mem.eql(u8, bytes[0..4], lil_file_magic)) return error.InvalidLilFile;
+    const count = std.mem.readInt(u32, bytes[4..8], .little);
+    const expected_len = 8 + @as(usize, count) * 2;
+    if (bytes.len != expected_len) return error.TruncatedLilFile;
+    const token_ids = try allocator.alloc(TokenId, count);
+    defer allocator.free(token_ids);
+    for (token_ids, 0..) |*id, index| id.* = std.mem.readInt(u16, bytes[8 + index * 2 ..][0..2], .little);
+    return decodeFunctionGraphV1(allocator, target, token_ids);
+}
+
 /// The constraint for the first graph ABI. The final add node is the function
 /// result, so no source-level `return` or graph-closing token is emitted.
 pub fn functionGraphV1NextToken(prefix: []const TokenId) ?TokenId {
@@ -1956,6 +1984,17 @@ test "seven raw model token IDs decode to an anonymous typed function graph" {
     try std.testing.expect(functionGraphV1NextToken(&tokens) == null);
     const malformed = [_]TokenId{ 1847, 3912, 3912, 3912, 8122, 7202, 7201 };
     try std.testing.expectError(error.UnexpectedToken, decodeFunctionGraphV1(std.testing.allocator, .aarch64_macos, &malformed));
+}
+
+test "opaque lil artifacts round trip raw graph tokens and reject truncation" {
+    const tokens = [_]TokenId{ 1847, 3912, 3912, 3912, 8122, 7201, 7202 };
+    const bytes = try encodeFunctionGraphV1File(std.testing.allocator, &tokens);
+    defer std.testing.allocator.free(bytes);
+    try std.testing.expectEqualSlices(u8, lil_file_magic, bytes[0..4]);
+    var decoded = try decodeFunctionGraphV1File(std.testing.allocator, bytes, .aarch64_macos);
+    defer decoded.deinit();
+    try std.testing.expectEqualStrings(function_graph_abi_version, decoded.abi_version);
+    try std.testing.expectError(error.TruncatedLilFile, decodeFunctionGraphV1File(std.testing.allocator, bytes[0 .. bytes.len - 1], .aarch64_macos));
 }
 
 test "semantic decoder exposes typed next-token constraints" {

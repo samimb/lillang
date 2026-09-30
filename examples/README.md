@@ -20,6 +20,15 @@ semantic shape that a token ABI must eventually encode:
 - [`add_i64-comparison.md`](add_i64-comparison.md) — end-to-end LIL/C prompt,
   debugger, compiler, performance, and token-accounting comparison.
 
+[`add_i64.lil`](add_i64.lil) is different: it is an opaque binary artifact
+containing raw `lil.graph/1` token IDs. It is compiled and inspected directly:
+
+```sh
+./lil debug examples/add_i64.lil
+./lil build examples/add_i64.lil -o add_i64
+./add_i64
+```
+
 ```sh
 # Retired backend-only `lil.token/0` smoke test; not the model ABI.
 zig build run -- eval-token-ids 1,16,32,6164,32,6166,33,12288,12289,34,12290,17,2

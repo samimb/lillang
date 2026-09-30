@@ -36,22 +36,27 @@ function (arg0: i64, arg1: i64) -> i64
   add(arg0, arg1)
 ```
 
-Inspect the backend projection without parsing source:
+Inspect the binary artifact without parsing source:
 
 ```sh
-zig build run -- lower-function-graph-v1 1847,3912,3912,3912,8122,7201,7202
+./lil debug add_i64.lil
 ```
 
 ### 4. Build an executable
 
+The model runtime writes its raw output to the opaque binary artifact
+`add_i64.lil`. For local development, `pack` is only an ingestion convenience:
+
 ```sh
-bash scripts/build-function-graph-v1-demo.sh \
-  1847,3912,3912,3912,8122,7201,7202 ./lil-add
+./lil pack 1847,3912,3912,3912,8122,7201,7202 -o add_i64.lil
+./lil debug add_i64.lil
+./lil build add_i64.lil -o lil-add
 ./lil-add
 ```
 
-The wrapper is compiler/build configuration. It calls the same `i64(i64,i64)`
-function boundary over a small no-overflow input table; it is not model output.
+`build` owns the backend wrapper and linker invocation. The wrapper calls the
+same `i64(i64,i64)` function boundary; it is compiler build configuration, not
+model output.
 
 ## C
 
